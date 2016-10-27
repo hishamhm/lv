@@ -1,5 +1,5 @@
 
-lv:
+lv: lv.hs
 	ghc -o lv lv.hs
 
 clean:
