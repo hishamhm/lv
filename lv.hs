@@ -297,10 +297,16 @@ initialState (LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
                      otherwise -> Nothing
          wireValues = map (\_ -> Nothing) wires
 
+-- TODO this is implying ordering, but LabVIEW does not specify it
 run :: LvState -> LvVI -> LvState
-run state vi =
-   -- TODO
-   state
+run state (LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
+   (\state' -> foldl' fireIndicator state' indicators) $ foldl' fireNode state nodes
+   where
+      -- TODO
+      fireNode state node = state
+      -- TODO
+      fireIndicator state indicator = state
+
 
 main = 
    let
