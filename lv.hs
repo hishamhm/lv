@@ -1,7 +1,7 @@
 
 import Data.List
 import Data.Maybe
-import Data.Sequence
+import Data.Sequence (mapWithIndex, fromList)
 import Data.Foldable (toList)
 import Debug.Trace
 
@@ -24,7 +24,7 @@ data LvValue = LvEXT Double
              -- | LvCXT Complex
              -- | LvCDB Complex
              -- | LvCSG Complex
-   deriving Show
+   deriving (Show, Eq)
 
 data LvControlType = LvCtrl
                    | LvTunCtrl -- used in structures
@@ -55,7 +55,7 @@ data LvType = LvN
             | LvC
             | LvI
             | LvERR String
-   deriving Show
+   deriving (Show, Eq)
 
 data LvWire = LvWire
                 LvType -- source node type
@@ -95,14 +95,12 @@ data LvState = LvState
                   [Maybe LvValue] -- wire values
    deriving Show
 
-swire a b = LvStringWire (a, 0) (b, 0)
+zwire a b = LvStringWire (a, 0) (b, 0)
 
 nwire a i b j = LvStringWire (a, i) (b, j)
 
 data FromTo = From | To
    deriving Eq
-
-
 
 makeVI :: [(String, LvControl)] -> [(String, LvIndicator)] -> [(String, LvNode)] -> [LvStringWire] -> LvVI
 makeVI controls indicators nodes stringWires =
@@ -113,8 +111,6 @@ makeVI controls indicators nodes stringWires =
          let
             pickSide :: a -> a -> a
             pickSide a b = if side == From then a else b
-
-            findPort1 ctrls indics = elemIndex name $ pickSide (map fst ctrls) (map fst indics)
 
             findPort ctrls indics = elemIndex name $ pickSide (map fst ctrls) (map fst indics)
             
@@ -127,11 +123,8 @@ makeVI controls indicators nodes stringWires =
                if name == nodeName
                then Just (nodeIdx, port)
                else Nothing
-
--- TEST STRUCTURE
-
          in
-            case findPort1 controls indicators of
+            case findPort controls indicators of
                Just i -> (pickSide LvC LvI, i, port)
                Nothing -> case find isJust $ toList $ mapWithIndex checkNode (fromList nodes) of
                   Just (Just (node, nodePort)) -> (LvN, node, nodePort)
@@ -147,6 +140,117 @@ makeVI controls indicators nodes stringWires =
       
       wires :: [LvWire]
       wires = map convert stringWires
+
+numberOfInputs :: String -> Int
+numberOfInputs "*" = 2
+numberOfInputs "WaitUntilNextMs" = 1
+numberOfInputs "RandomNumber" = 0
+numberOfInputs "Bundle" = 2
+numberOfInputs "+" = 2
+numberOfInputs "InsertIntoArray" = 2
+numberOfInputs "ArrayMax&Min" = 1
+
+applyFunction :: String -> [LvValue] -> [LvValue]
+
+applyFunction "*" [LvDBL a, LvDBL b] = [LvDBL (a * b)]
+
+initialState :: LvVI -> LvState
+initialState (LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
+   LvState controlValues indicatorValues subStates wireValues
+      where
+         controlValues = map (\(_, LvControl _ v) -> v) controls
+         indicatorValues = map (\(_, LvIndicator _ v) -> v) indicators
+         subStates = map expandNode nodes
+            where
+               expandNode :: (String, LvNode) -> Maybe LvState
+               expandNode node = 
+                  case node of
+                     (_, LvSubVI vi) -> Just $ initialState vi
+                     (_, LvStructure _ vi) -> Just $ initialState vi
+                     otherwise -> Nothing
+         wireValues = map (\_ -> Nothing) wires
+
+indices l = mk 0 l
+   where
+      mk _ [] = []
+      mk n (x:xs) = n : mk (n+1) xs
+
+-- TODO this is implying the ordering given in the description of LvVI,
+-- but LabVIEW does not specify it
+run :: LvState -> LvVI -> LvState
+run state (LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
+   let
+      state' = foldl' fireControl state (indices controls)
+      (_, state'') = foldl' fireNode (0, state) nodes
+      (_, state''') = foldl' fireIndicator (0, state'') indicators
+   in
+      state'''
+   where
+
+      propagate :: LvValue -> LvType -> Int -> Int -> [Maybe LvValue] -> [Maybe LvValue]
+      propagate val typ nidx pidx wvalues =
+         (toList $ mapWithIndex setValue $ (fromList wvalues))
+            where
+               setValue widx wvalue =
+                  case wires !! widx of
+                  LvWire t n p _ _ _ | t == typ && n == nidx && p == pidx -> Just val
+                  otherwise -> wvalue
+
+      replace :: Int -> a -> [a] -> [a]
+      replace idx val list =
+         let (a, b) = splitAt idx list
+         in a ++ [val] ++ (if null b then [] else tail b)
+
+      incomingValue :: LvType -> Int -> Int -> [Maybe LvValue] -> Maybe LvValue
+      incomingValue typ nidx pidx ws =
+         -- look for dst = (typ, nidx, pidx) in wires, get its widx, then return ws!!widx
+         -- FIXME what if more than one incoming wires have values; we are discarding. CHECK: should trigger 2x?
+         fromMaybe Nothing $ find isJust $ map matchDst $ zip wires ws
+         where
+            matchDst (LvWire _ _ _ t n p, val) = if typ == t && nidx == n && pidx == p then val else Nothing
+
+      fireControl (LvState cvalues is ss wvalues) cidx =
+         LvState cvalues is ss (propagate (cvalues !! cidx) LvC cidx 0 wvalues)
+
+      fireNode (nidx, (LvState cs is ss ws)) (nname, node) = (nidx + 1, state')
+         where
+         state' =
+            case node of
+            LvSubVI vi -> state -- TODO
+            LvFunction name -> 
+               let
+                  ninputs = numberOfInputs name
+                  inVals = map (\n -> incomingValue LvN nidx n ws) [0..(ninputs - 1)]
+               in
+                  -- if not all inVals have values, don't fire: return unaltered state
+                  if elem Nothing inVals 
+                  then state
+                  else 
+                     let
+                        outVals = applyFunction name (catMaybes inVals)
+                        propagateOutVal curWs pidx = propagate (outVals !! pidx) LvN nidx pidx curWs
+                        newWs = foldl' propagateOutVal ws [0..((length outVals) - 1)]
+                     in
+                        LvState cs is ss newWs
+            LvConstant val -> LvState cs is ss (propagate val LvN nidx 0 ws)
+            LvStructure typ vi -> state -- TODO
+            LvFeedbackNode initVal ->
+               let
+                  inVal = incomingValue LvN nidx 0 ws
+                  newVal =
+                     case inVal of
+                     Nothing -> initVal
+                     Just v -> v 
+               in
+                  LvState cs is ss (propagate newVal LvN nidx 0 ws)
+      
+      fireIndicator (iidx, (LvState cs is ss ws)) (iname, indicator) = (iidx + 1, state')
+         where
+         inVal = incomingValue LvI iidx 0 ws
+         state' =
+            case inVal of
+            Nothing -> state
+            Just val -> LvState cs (replace iidx val is) ss ws
 
 example1 =
    makeVI
@@ -181,31 +285,31 @@ example1 =
                [ -- wires
                   nwire "i" 0            "i * delay" 0,
                   nwire "delay tunnel" 0 "i * delay" 1,
-                  swire "i * delay" "keys array",
-                  swire "* tunnel" "WaitUntilNextMs",
+                  zwire "i * delay" "keys array",
+                  zwire "* tunnel" "WaitUntilNextMs",
                   nwire "100" 0          "100 * RandomNumber" 0,
                   nwire "RandomNumber" 0 "100 * RandomNumber" 1,
-                  swire "100 * RandomNumber" "values array"
+                  zwire "100 * RandomNumber" "values array"
                ]
             )),
             ("Bundle", LvFunction "Bundle")
          ]
          [ -- wires
-            swire "Number of measurements" "N",
-            swire "Delay (sec)" "delay tunnel",
+            zwire "Number of measurements" "N",
+            zwire "Delay (sec)" "delay tunnel",
             nwire "Delay (sec)" 0 "Delay * 1000" 0,
             nwire "1000" 0        "Delay * 1000" 1,
-            swire "Delay * 1000" "* tunnel",
+            zwire "Delay * 1000" "* tunnel",
             nwire "keys array" 0 "Bundle" 0,
             nwire "values array" 0 "Bundle" 1,
-            swire "Bundle" "XY graph"
+            zwire "Bundle" "XY graph"
          ]
 
 randomXY =
    makeVI
          [ -- controls
             ("Number of measurements", LvControl LvCtrl (LvI32 10)),
-            ("Delay (sec)", LvControl LvCtrl (LvDBL 1.0))
+            ("Delay (sec)", LvControl LvCtrl (LvDBL 2.0))
          ]
          [ -- indicators
             ("XY graph", LvIndicator LvIndic (LvCluster [LvArray 1 (LvDBL 0.0), LvArray 1 (LvDBL 0.0)]))
@@ -236,17 +340,17 @@ randomXY =
                   ("RandomNumber", LvFunction "RandomNumber")
                ]
                [ -- wires
-                  swire "* tunnel" "WaitUntilNextMs",
+                  zwire "* tunnel" "WaitUntilNextMs",
                   nwire "i" 0 "i + 1" 0,
                   nwire "1" 0 "i + 1" 1,
                   nwire "i + 1" 0        "i+1 * delay" 0,
                   nwire "delay tunnel" 0 "i+1 * delay" 1,
                   nwire "feedback loop tunnel" 0 "feedback + *" 0,
                   nwire "i+1 * delay" 0          "feedback + *" 1,
-                  swire "feedback + *" "keys array",
+                  zwire "feedback + *" "keys array",
                   nwire "100" 0          "100 * RandomNumber" 0,
                   nwire "RandomNumber" 0 "100 * RandomNumber" 1,
-                  swire "100 * RandomNumber" "values array"
+                  zwire "100 * RandomNumber" "values array"
                ]
             )),
             ("insert keys", (LvFunction "InsertIntoArray")),
@@ -258,55 +362,28 @@ randomXY =
             ("feedback to loop", (LvFeedbackNode (LvDBL 0.0)))
          ]
          [ -- wires
-            swire "Number of measurements" "N",
+            zwire "Number of measurements" "N",
             nwire "Delay (sec)" 0 "Delay * 1000" 0,
             nwire "1000" 0        "Delay * 1000" 1,
-            swire "Delay * 1000" "* tunnel",
-            swire "Delay (sec)" "delay tunnel",
+            zwire "Delay * 1000" "* tunnel",
+            zwire "Delay (sec)" "delay tunnel",
 
             nwire "feedback to keys array" 0 "insert keys" 0,
             nwire "keys array" 0             "insert keys" 1,
-            swire "insert keys" "feedback to keys array",
-            swire "insert keys" "max key",
-            swire "max key" "feedback to loop",
-            swire "feedback to loop" "feedback loop tunnel",
+            zwire "insert keys" "feedback to keys array",
+            zwire "insert keys" "max key",
+            zwire "max key" "feedback to loop",
+            zwire "feedback to loop" "feedback loop tunnel",
 
             nwire "feedback to values array" 0 "insert values" 0,
             nwire "values array" 0             "insert values" 1,
-            swire "insert values" "feedback to values array",
+            zwire "insert values" "feedback to values array",
             
             nwire "insert keys"   0 "bundle" 0,
             nwire "insert values" 0 "bundle" 1,
 
-            swire "bundle" "XY graph"
+            zwire "bundle" "XY graph"
          ]
-
-initialState :: LvVI -> LvState
-initialState (LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
-   LvState controlValues indicatorValues subStates wireValues
-      where
-         controlValues = map (\(_, LvControl _ v) -> v) controls
-         indicatorValues = map (\(_, LvIndicator _ v) -> v) indicators
-         subStates = map expandNode nodes
-            where
-               expandNode :: (String, LvNode) -> Maybe LvState
-               expandNode node = 
-                  case node of
-                     (_, LvSubVI vi) -> Just $ initialState vi
-                     (_, LvStructure _ vi) -> Just $ initialState vi
-                     otherwise -> Nothing
-         wireValues = map (\_ -> Nothing) wires
-
--- TODO this is implying ordering, but LabVIEW does not specify it
-run :: LvState -> LvVI -> LvState
-run state (LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
-   (\state' -> foldl' fireIndicator state' indicators) $ foldl' fireNode state nodes
-   where
-      -- TODO
-      fireNode state node = state
-      -- TODO
-      fireIndicator state indicator = state
-
 
 main = 
    let
