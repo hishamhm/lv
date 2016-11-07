@@ -45,7 +45,8 @@ data LvValue = LvEXT Double
    deriving (Show, Eq)
 
 data LvControlType = LvCtrl
-                   | LvTunCtrl -- used in structures
+                   | LvTunCtrl -- tunnel, used in loops
+                   | LvSRCtrl -- shift register, used in loops
                    -- TODO: tables?
    deriving Show
 
@@ -53,11 +54,13 @@ data LvControl = LvControl LvControlType LvValue
    deriving Show
 
 data LvTunnelMode = LvAutoIndexing
+                  | LvLastValue
                   -- TODO other kinds
    deriving Show
 
 data LvIndicatorType = LvIndic
-                     | LvTunIndic LvTunnelMode -- used in loops
+                     | LvTunIndic LvTunnelMode -- tunnel, used in loops
+                     | LvSRIndic -- shift register, used in loops
                      -- TODO: tables?
    deriving Show
 
@@ -288,6 +291,51 @@ run state (LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
 -- Example programs
 -- ========================================
 
+-- TestingFor.vi
+-- On continuous run, running this with 0 in the input produces 0,
+-- incrementing to 1 it remains at 0, and
+-- incrementing to 2 it increments the output forever.
+-- This is due to the shift register.
+-- Uncommenting the node and the wire that are marked ***
+-- stops the endless incrementation. FIXME but does it busy-wait?
+testingFor =
+   makeVI
+         [ -- controls
+            ("control", LvControl LvCtrl (LvDBL 0.0))
+         ]
+         [ -- indicators
+            ("indicator", LvIndicator LvIndic (LvDBL 0.0))
+         ]
+         [ -- nodes
+            --("0", LvConstant (LvDBL 0.00)), -- ***
+            ("For loop", LvStructure LvFor (makeVI
+               [ -- controls
+                  ("N", LvControl LvTunCtrl (LvI32 0)),
+                  ("i", LvControl LvCtrl (LvI32 0)),
+                  ("shift reg out", LvControl LvSRCtrl (LvI32 0))
+               ]
+               [ -- indicators
+                  ("shift reg in", LvIndicator LvSRIndic (LvI32 0)),
+                  ("out", LvIndicator (LvTunIndic LvLastValue) (LvI32 0))
+               ]
+               [ -- nodes
+                  ("+", LvFunction "+")
+               ]
+               [ -- wires
+                  nwire "shift reg out" 0 "+" 0,
+                  nwire "i" 0             "+" 1,
+                  zwire "+" "shift reg in",
+                  zwire "+" "out",
+                  zwire "shift reg in" "shift reg out" -- this is not a wire!
+               ]
+            ))
+         ]
+         [ -- wires
+            --zwire "0" "shift reg out", -- ***
+            zwire "control" "N",
+            zwire "out" "indicator"
+         ]            
+
 example1 =
    makeVI
          [ -- controls
@@ -302,7 +350,7 @@ example1 =
             ("Delay * 1000", LvFunction "*"),
             ("For loop", LvStructure LvFor (makeVI
                [ -- controls
-                  ("N", LvControl LvCtrl (LvI32 0)),
+                  ("N", LvControl LvTunCtrl (LvI32 0)),
                   ("i", LvControl LvCtrl (LvI32 0)),
                   ("delay tunnel", LvControl LvTunCtrl (LvDBL 0.0)),
                   ("* tunnel", LvControl LvTunCtrl (LvDBL 0.0))
@@ -355,7 +403,7 @@ randomXY =
             ("Delay * 1000", LvFunction "*"),
             ("For loop", LvStructure LvFor (makeVI
                [ -- controls
-                  ("N", LvControl LvCtrl (LvI32 0)),
+                  ("N", LvControl LvTunCtrl (LvI32 0)),
                   ("i", LvControl LvCtrl (LvI32 0)),
                   ("delay tunnel", LvControl LvTunCtrl (LvDBL 0.0)),
                   ("* tunnel", LvControl LvTunCtrl (LvDBL 0.0)),
