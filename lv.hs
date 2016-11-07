@@ -3,7 +3,25 @@ import Data.List
 import Data.Maybe
 import Data.Sequence (mapWithIndex, fromList)
 import Data.Foldable (toList)
+
+-- ========================================
+-- Debugging
+-- ========================================
 import Debug.Trace
+import ShowConcat ((@@), (@@@))
+
+-- Debugging on:
+tsi :: Show a => a -> a
+tsi = traceShowId
+trc = trace
+
+-- Debugging off:
+--tsi = id
+--trc m = id
+
+-- ========================================
+-- Data types
+-- ========================================
 
 data LvValue = LvEXT Double
              | LvDBL Double
@@ -95,12 +113,16 @@ data LvState = LvState
                   [Maybe LvValue] -- wire values
    deriving Show
 
+data FromTo = From | To
+   deriving Eq
+
+-- ========================================
+-- Program construction
+-- ========================================
+
 zwire a b = LvStringWire (a, 0) (b, 0)
 
 nwire a i b j = LvStringWire (a, i) (b, j)
-
-data FromTo = From | To
-   deriving Eq
 
 makeVI :: [(String, LvControl)] -> [(String, LvIndicator)] -> [(String, LvNode)] -> [LvStringWire] -> LvVI
 makeVI controls indicators nodes stringWires =
@@ -141,6 +163,10 @@ makeVI controls indicators nodes stringWires =
       wires :: [LvWire]
       wires = map convert stringWires
 
+-- ========================================
+-- Functions
+-- ========================================
+
 numberOfInputs :: String -> Int
 numberOfInputs "*" = 2
 numberOfInputs "WaitUntilNextMs" = 1
@@ -153,6 +179,10 @@ numberOfInputs "ArrayMax&Min" = 1
 applyFunction :: String -> [LvValue] -> [LvValue]
 
 applyFunction "*" [LvDBL a, LvDBL b] = [LvDBL (a * b)]
+
+-- ========================================
+-- Dataflow
+-- ========================================
 
 initialState :: LvVI -> LvState
 initialState (LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
@@ -170,18 +200,13 @@ initialState (LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
                      otherwise -> Nothing
          wireValues = map (\_ -> Nothing) wires
 
-indices l = mk 0 l
-   where
-      mk _ [] = []
-      mk n (x:xs) = n : mk (n+1) xs
-
 -- TODO this is implying the ordering given in the description of LvVI,
 -- but LabVIEW does not specify it
 run :: LvState -> LvVI -> LvState
 run state (LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
    let
-      state' = foldl' fireControl state (indices controls)
-      (_, state'') = foldl' fireNode (0, state) nodes
+      (_, state')   = foldl' fireControl   (0, state)   controls
+      (_, state'')  = foldl' fireNode      (0, state')  nodes
       (_, state''') = foldl' fireIndicator (0, state'') indicators
    in
       state'''
@@ -209,10 +234,15 @@ run state (LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
          where
             matchDst (LvWire _ _ _ t n p, val) = if typ == t && nidx == n && pidx == p then val else Nothing
 
-      fireControl (LvState cvalues is ss wvalues) cidx =
-         LvState cvalues is ss (propagate (cvalues !! cidx) LvC cidx 0 wvalues)
+      fireControl (cidx, (LvState cs is ss ws)) (cname, control) =
+         trc ("Firing control " ++ cname) $ tsi $
+         (cidx + 1, state')
+         where
+         state' = LvState cs is ss (propagate (cs !! cidx) LvC cidx 0 ws)
 
-      fireNode (nidx, (LvState cs is ss ws)) (nname, node) = (nidx + 1, state')
+      fireNode (nidx, state@(LvState cs is ss ws)) (nname, node) =
+         trc ("Firing node " ++ nname) $ tsi $
+         (nidx + 1, state')
          where
          state' =
             case node of
@@ -244,13 +274,19 @@ run state (LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
                in
                   LvState cs is ss (propagate newVal LvN nidx 0 ws)
       
-      fireIndicator (iidx, (LvState cs is ss ws)) (iname, indicator) = (iidx + 1, state')
+      fireIndicator (iidx, state@(LvState cs is ss ws)) (iname, indicator) =
+         trc ("Firing indicator " ++ iname) $ tsi $
+         (iidx + 1, state')
          where
          inVal = incomingValue LvI iidx 0 ws
          state' =
             case inVal of
             Nothing -> state
             Just val -> LvState cs (replace iidx val is) ss ws
+
+-- ========================================
+-- Example programs
+-- ========================================
 
 example1 =
    makeVI
