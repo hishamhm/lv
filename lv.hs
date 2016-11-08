@@ -266,7 +266,16 @@ run state (LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
                      in
                         LvState cs is ss newWs
             LvConstant val -> LvState cs is ss (propagate val LvN nidx 0 ws)
-            LvStructure typ vi -> state -- TODO
+            LvStructure typ vi@(LvVI (LvPanel ctrls indics) diagram) ->
+               let
+                  inVals = map (\n -> incomingValue LvN nidx n ws) [0..((length ctrls) - 1)]
+               in
+                  case typ of
+                  LvFor -> 
+                     if isJust (inVals !! 0)
+                     then state -- TODO run structure
+                     else state
+                  LvWhile -> state -- TODO
             LvFeedbackNode initVal ->
                let
                   inVal = incomingValue LvN nidx 0 ws
