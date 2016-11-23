@@ -119,23 +119,23 @@ data LvVisibleState = LvVisibleState {
                       }
    
 data LvCont = LvCont {
-                 kFn :: (LvVisibleState -> [LvValue] -> [LvValue]),
+                 kFn :: LvVisibleState -> [LvValue] -> (Maybe LvCont, [LvValue]),
                  kArgs :: [LvValue]
               }
 
 data LvNodeState = LvNodeState {
                       nsName :: String,
-                      nsCont :: (Maybe LvCont),
-                      nsInlets :: (Seq (Maybe LvValue)),
-                      nsStruct :: (Maybe LvState)
+                      nsCont :: Maybe LvCont,
+                      nsInlets :: Seq (Maybe LvValue),
+                      nsStruct :: Maybe LvState
                    }
    deriving Show
 
 data LvState = LvState {
                   sTs :: Int,
                   sSched :: [LvNodeAddr],
-                  sNodeStates :: (Seq LvNodeState),
-                  sIndicatorValues :: (Seq (Maybe LvValue))
+                  sNodeStates :: Seq LvNodeState,
+                  sIndicatorValues :: Seq (Maybe LvValue)
                }
    deriving Show
 
@@ -297,9 +297,12 @@ run (LvState ts ((LvNodeAddr typ idx):ns) nstates ivs) (LvVI (LvPanel controls i
          in
             case node of
             LvSubVI vi -> state1 -- TODO
-            LvFunction name -> 
+            LvFunction name ->
                let
-                  (k', outVals) = applyFunction (visible state1) name (catMaybes $ tsi $ inlets)
+                  (k', outVals) =
+                     case k of
+                     Nothing -> applyFunction (visible state1) name (catMaybes $ tsi $ inlets)
+                     Just k  -> (kFn k)       (visible state1)      (catMaybes $ tsi $ inlets)
                   firePort st pidx = fire (outVals !! pidx) (LvPortAddr LvN idx pidx) st
                in
                   if isNothing k'
