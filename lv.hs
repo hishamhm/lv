@@ -236,6 +236,8 @@ applyFunction vst "+" [LvI32 a, LvDBL b] = LvReturn [LvDBL ((fromIntegral a) + b
 applyFunction vst "+" [LvDBL a, LvI32 b] = LvReturn [LvDBL (a + (fromIntegral b))]
 applyFunction vst "+" [LvI32 a, LvI32 b] = LvReturn [LvI32 (a + b)]
 
+applyFunction vst "RandomNumber" [] = LvReturn [LvDBL 0.5] -- not very random :)
+
 applyFunction vst@(LvVisibleState ts) "WaitUntilNextMs" [LvDBL msd] =
    let
       ms = floor msd
@@ -264,17 +266,20 @@ numberOfControls (LvVI (LvPanel controls indicators) diagram) = length controls
 numberOfIndicators :: LvVI -> Int
 numberOfIndicators (LvVI (LvPanel controls indicators) diagram) = length indicators
 
+-- FIXME schedule while loop
+initialSchedule (LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
+   (map (LvNodeAddr LvC) (indices controls))
+   ++ (map (LvNodeAddr LvN) $ filter (\i -> isBootNode (nodes !! i)) (indices nodes))
+   where
+      isBootNode (_, (LvConstant _)) = True
+      isBootNode (_, (LvFeedbackNode _)) = True
+      isBootNode (_, (LvFunction name)) | numberOfInputs name == 0 = True
+      isBootNode _ = False
+
 initialState :: Int -> LvVI -> LvState
-initialState ts (LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
-   LvState ts initialSchedule nodeStates controlValues indicatorValues
+initialState ts vi@(LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
+   LvState ts (initialSchedule vi) nodeStates controlValues indicatorValues
       where
-         -- FIXME schedule while loop
-         initialSchedule = (map (LvNodeAddr LvC) (indices controls))
-                        ++ (map (LvNodeAddr LvN) $ filter (\i -> isBootNode (nodes !! i)) (indices nodes))
-            where
-               isBootNode (_, (LvConstant _)) = True
-               isBootNode (_, (LvFeedbackNode _)) = True
-               isBootNode _ = False
          nodeStates = fromList $ map expandNode nodes
             where
                expandNode :: (String, LvNode) -> LvNodeState
@@ -299,14 +304,13 @@ initCounter :: LvState -> LvState
 initCounter state@(LvState ts sched nstates cvs ivs) =
    LvState (ts + 1) sched nstates (update 1 (Just $ LvI32 0) cvs) ivs
 
--- Counter is always at index 1
-incrementCounter :: LvState -> LvState
-incrementCounter state@(LvState ts sched nstates cvs ivs) =
-   LvState (ts + 1) sched nstates (update 1 i' cvs) ivs
-   where
-      i' = Just $ LvI32 $ case index cvs 1 of
-                             Nothing -> 0
-                             Just (LvI32 i) -> i + 1
+nextStep :: LvVI -> LvState -> Int -> LvState
+nextStep vi state@(LvState ts sched nstates cvs ivs) i' =
+   let
+      cvs' = (update 1 (Just $ LvI32 i') cvs)
+   in
+      -- TODO increment counter, shift registers
+      LvState (ts + 1) (initialSchedule vi) nstates cvs' ivs
 
 visible :: LvState -> LvVisibleState
 visible state@(LvState ts sched nstate cvs ivs) =
@@ -341,7 +345,7 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) (LvVI (LvPanel cont
                case k of
                Nothing -> toList values
                Just (LvKFunction kfn kargs) -> map Just kargs
-               Just (LvKState st) -> undefined
+               Just (LvKState st) -> trc "reading inlets from KState!?" $ undefined
             (name, node) = nodes !! idx
          in
             case node of
@@ -381,10 +385,22 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) (LvVI (LvPanel cont
                         Nothing -> initCounter $ feedInletsToVi inlets $ initialState ((sTs state1) + 1) vi
                         Just (LvKState st) -> st
                      (statek, go) = run state2 vi
+                     Just (LvI32 n) = index cvs 0
+                     nextk =
+                        if go
+                        then Just (LvKState statek)
+                        else 
+                           let
+                              Just (LvI32 i) = (\state@(LvState ts qs ns cvs ivs) -> index cvs 1) statek
+                              i' = i + 1
+                           in
+                              if trc (i' @@ " >= " @@ n) $ i' == n
+                              then Nothing
+                              else Just (LvKState (nextStep vi statek i'))
                      nstate' = (LvNodeState name nextk values)
-                        where nextk = if go then Just (LvKState statek) else Nothing
-                     thisq = if go then [q] else []
+                     thisq = if isJust nextk then [q] else []
                   in
+                     -- TODO fire exits when for finishes
                      LvState ((sTs statek) + 1) (qs ++ thisq) (update idx nstate' nstates) cvs ivs
 
                LvWhile ->
@@ -454,7 +470,7 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) (LvVI (LvPanel cont
 -- incrementing to 2 it increments the output forever.
 -- This is due to the shift register.
 -- Uncommenting the node and the wire that are marked ***
--- stops the endless incrementation. FIXME but does it busy-wait?
+-- stops the endless increment. FIXME but does it busy-wait?
 testingFor =
    makeVI
          [ -- controls
