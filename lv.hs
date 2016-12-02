@@ -48,6 +48,7 @@ data LvValue = LvEXT Double
 data LvControl = LvControl LvValue
                | LvAutoControl
                | LvTunControl
+               | LvTunSRControl
                | LvSRControl LvValue
    deriving Show
 
@@ -445,6 +446,7 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) (LvVI (LvPanel cont
                         unfilledTunnel cidx = 
                            case controls !! cidx of
                               (name, LvTunControl) -> isNothing (index inlets cidx)
+                              (name, LvTunSRControl) -> isNothing (index inlets cidx)
                               otherwise -> False
                   LvWhile -> True -- FIXME what if a wire connects in? does the while-loop wait until there's a value?
             otherwise ->
@@ -490,7 +492,7 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) (LvVI (LvPanel cont
 -- incrementing to 2 it increments the output forever.
 -- This is due to the shift register.
 -- Uncommenting the node and the wire that are marked ***
--- stops the endless increment. FIXME but does it busy-wait?
+-- stops the endless increment, but it busy-waits.
 testingFor =
    makeVI
          [ -- controls
@@ -506,6 +508,44 @@ testingFor =
                   ("N", LvTunControl),
                   ("i", LvAutoControl),
                   ("shift reg out", LvSRControl (LvDBL 0.0))
+               ]
+               [ -- indicators
+                  ("shift reg in", LvSRIndicator 2),
+                  ("out", LvTunIndicator LvLastValue)
+               ]
+               [ -- nodes
+                  ("+", LvFunction "+")
+               ]
+               [ -- wires
+                  nwire "shift reg out" 0 "+" 0,
+                  nwire "i" 0             "+" 1,
+                  zwire "+" "shift reg in",
+                  zwire "+" "out"
+               ]
+            ))
+         ]
+         [ -- wires
+            --zwire "0" "shift reg out", -- ***
+            zwire "input" "N",
+            zwire "out" "indicator"
+         ]            
+
+testingFor2 =
+   makeVI
+         [ -- controls
+            ("input", LvControl (LvDBL 10.0))
+         ]
+         [ -- indicators
+            ("indicator", LvIndicator (LvDBL (-999.0)))
+         ]
+         [ -- nodes
+            --("0", LvConstant (LvDBL 0.00)), -- ***
+            ("20", LvConstant (LvDBL 20.00)),
+            ("For loop", LvStructure LvFor (makeVI
+               [ -- controls
+                  ("N", LvTunControl),
+                  ("i", LvAutoControl),
+                  ("shift reg out", LvTunSRControl)
                ]
                [ -- indicators
                   ("shift reg in", LvSRIndicator 2),
