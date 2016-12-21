@@ -90,6 +90,7 @@ data LvStringWire = LvStringWire (String, Int) (String, Int)
 
 data LvStrucType = LvWhile
                  | LvFor
+                 -- TODO LvSequence
    deriving Show
 
 data LvNode = LvSubVI LvVI
@@ -440,15 +441,13 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) (LvVI (LvPanel cont
       in
          case node of
             LvStructure typ vi@(LvVI (LvPanel controls indicators) diagram) ->
-               case typ of
-                  LvFor -> find unfilledTunnel (indices controls) == Nothing
-                     where
-                        unfilledTunnel cidx = 
-                           case controls !! cidx of
-                              (name, LvTunControl) -> isNothing (index inlets cidx)
-                              (name, LvTunSRControl) -> isNothing (index inlets cidx)
-                              otherwise -> False
-                  LvWhile -> True -- FIXME what if a wire connects in? does the while-loop wait until there's a value?
+               find unfilledTunnel (indices controls) == Nothing
+                  where
+                     unfilledTunnel cidx = 
+                        case controls !! cidx of
+                           (name, LvTunControl) -> isNothing (index inlets cidx)
+                           (name, LvTunSRControl) -> isNothing (index inlets cidx)
+                           otherwise -> False
             otherwise ->
                elemIndexL Nothing inlets == Nothing -- all inlets have values
 
@@ -485,6 +484,8 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) (LvVI (LvPanel cont
 -- ========================================
 -- Example programs
 -- ========================================
+
+-- TODO test a while with a tunnel
 
 -- TestingFor.vi
 -- On continuous run, running this with 0 in the input produces 0,
