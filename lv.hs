@@ -70,7 +70,6 @@ data LvPanel = LvPanel
 data LvType = LvN
             | LvC
             | LvI
-            | LvERR String
    deriving (Show, Eq)
 
 data LvPortAddr = LvPortAddr LvType Int Int
@@ -191,7 +190,7 @@ makeVI controls indicators nodes stringWires =
                Just i -> (pickSide LvC LvI, i, port)
                Nothing -> case find isJust $ toList $ mapWithIndex checkNode (fromList nodes) of
                   Just (Just (node, nodePort)) -> (LvN, node, nodePort)
-                  Nothing -> (LvERR name, 0, port)
+                  Nothing -> error ("No such wire " ++ name ++ " (attempted to connect port " ++ show port ++ ")")
 
       convert :: LvStringWire -> LvWire      
       convert (LvStringWire (from, fromPort) (to, toPort)) =
@@ -216,6 +215,7 @@ numberOfInputs "Bundle" = 2
 numberOfInputs "+" = 2
 numberOfInputs "InsertIntoArray" = 2
 numberOfInputs "ArrayMax&Min" = 1
+numberOfInputs "<" = 2
 numberOfInputs fn = trc ("Failing numberOfInputs " ++ fn) $ undefined
 
 applyFunction :: LvVisibleState -> String -> [LvValue] -> LvReturn
@@ -230,19 +230,25 @@ applyFunction vst "+" [LvI32 a, LvDBL b] = LvReturn [LvDBL ((fromIntegral a) + b
 applyFunction vst "+" [LvDBL a, LvI32 b] = LvReturn [LvDBL (a + (fromIntegral b))]
 applyFunction vst "+" [LvI32 a, LvI32 b] = LvReturn [LvI32 (a + b)]
 
+applyFunction vst "<" [LvDBL a, LvDBL b] = LvReturn [LvBoolean (a < b)]
+applyFunction vst "<" [LvI32 a, LvDBL b] = LvReturn [LvBoolean ((fromIntegral a) < b)]
+applyFunction vst "<" [LvDBL a, LvI32 b] = LvReturn [LvBoolean (a < (fromIntegral b))]
+applyFunction vst "<" [LvI32 a, LvI32 b] = LvReturn [LvBoolean (a < b)]
+
 applyFunction vst "RandomNumber" [] = LvReturn [LvDBL 0.5] -- not very random :)
 
-applyFunction vst@(LvVisibleState ts) "WaitUntilNextMs" [LvDBL msd] =
+applyFunction vst@(LvVisibleState ts) "WaitUntilNextMs" [LvI32 ms] =
    let
-      ms = floor msd
       nextMs = ts - (ts `mod` ms) + ms
    in
-      LvContinue $ LvKFunction waitUntil [LvDBL (fromIntegral nextMs)]
+      LvContinue $ LvKFunction waitUntil [LvI32 nextMs]
+
+applyFunction vst "WaitUntilNextMs" [LvDBL msd] = applyFunction vst "WaitUntilNextMs" [LvI32 (floor msd)]
 
 applyFunction vst fn args = trc ("Failing applyFunction " ++ fn @@@ args) $ undefined
 
-waitUntil vst@(LvVisibleState ts) arg@[LvDBL nextMs] =
-   if ts >= floor nextMs
+waitUntil vst@(LvVisibleState ts) arg@[LvI32 nextMs] =
+   if ts >= nextMs
    then LvReturn []
    else LvContinue $ LvKFunction waitUntil arg
 
@@ -272,7 +278,7 @@ initialSchedule (LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
 
 initialState :: Int -> LvVI -> LvState
 initialState ts vi@(LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
-   LvState ts (initialSchedule vi) nodeStates controlValues indicatorValues
+   LvState (ts + 1) (initialSchedule vi) nodeStates controlValues indicatorValues
       where
          nodeStates = fromList $ map expandNode nodes
             where
@@ -302,15 +308,18 @@ feedInletsToVi inlets state@(LvState ts sched nstates cvs ivs) =
    in
       LvState (ts + 1) sched nstates (combine inlets cvs) ivs
 
--- Counter is always at index 1
+iIndex = 0 -- counter control for both 'for' and 'while'
+nIndex = 1 -- limit control for 'for'
+testIndex = 0 -- test indicator for 'while'
+
 initCounter :: LvState -> LvState
 initCounter state@(LvState ts sched nstates cvs ivs) =
-   LvState (ts + 1) sched nstates (update 1 (Just $ LvI32 0) cvs) ivs
+   LvState (ts + 1) sched nstates (update iIndex (Just $ LvI32 0) cvs) ivs
 
 nextStep :: LvVI -> LvState -> Int -> LvState
 nextStep vi@(LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) state@(LvState ts sched nstates cvs ivs) i' =
    let
-      cvs' = update 1 (Just $ LvI32 i') cvs
+      cvs' = update iIndex (Just $ LvI32 i') cvs
       cvs'' :: Seq (Maybe LvValue)
       cvs'' = foldl' shiftRegister cvs' (zip indicators (toList ivs))
          where
@@ -333,15 +342,15 @@ coerceToInt v@(LvDBL d) = LvI32 (floor d)
 
 -- TODO this is implying the ordering given in the description of LvVI,
 -- but LabVIEW does not specify it
-run :: LvState -> LvVI -> (LvState, Bool)
+run :: LvState -> LvVI -> LvState
 
-run state@(LvState _ [] _ _ _) vi = (state, False)
+run state@(LvState _ [] _ _ _) vi = state
 
 run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) (LvVI (LvPanel controls indicators) (LvDiagram nodes wires)) =
-   (state', True)
-   where 
-   state0 = LvState ts qs nstates cvs ivs
-   state' = case typ of
+   let
+      state0 = LvState (ts + 1) qs nstates cvs ivs
+   in
+      case typ of
    
       LvC ->
          fire (fromMaybe (trc ("maybe???" @@@ cvs @@@ idx) $ undefined) $ index cvs idx) (LvPortAddr LvC idx 0) state0
@@ -390,49 +399,64 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) (LvVI (LvPanel cont
                fire value (LvPortAddr LvN idx 0) state1
 
             LvStructure typ vi@(LvVI (LvPanel ctrls indics) diagram) ->
-               trc ("firing structure " @@ typ) $
-               case typ of
-
-               LvFor -> 
-                  let
-                     state2 =
-                        case k of
-                        Nothing -> initCounter $ feedInletsToVi inlets $ initialState ((sTs state1) + 1) vi
-                        Just (LvKState st) -> st
-                     (statek, go) = run state2 vi
-                     LvI32 n = coerceToInt $ fromMaybe (LvI32 0) $ index cvs 0
-                     nextk =
-                        if go
-                        then Just (LvKState statek)
-                        else 
-                           let
-                              Just (LvI32 i) = (\state@(LvState ts qs ns cvs ivs) -> index cvs 1) statek
-                              i' = i + 1
-                           in
-                              if trc (i' @@ " >= " @@ n) $ i' >= n
+               let
+                  getControl   st idx def = fromMaybe def $ (\state@(LvState ts qs ns cvs ivs) -> index cvs idx) st
+                  getIndicator st idx def = fromMaybe def $ (\state@(LvState ts qs ns cvs ivs) -> index ivs idx) st
+                  
+                  runLoop vi shouldStop =
+                     let
+                        state2 = 
+                           case k of
+                           Nothing -> initCounter $ feedInletsToVi inlets $ initialState ((sTs state1) + 1) vi
+                           Just (LvKState st) -> st
+                        statek@(LvState _ qk _ _ _) = run state2 vi
+                        nextk =
+                           if not $ null qk
+                           then Just (LvKState statek)
+                           else
+                              if shouldStop statek
                               then Nothing
-                              else Just (LvKState (nextStep vi statek i'))
-                     nstate' = (LvNodeState name nextk values)
-                     thisq = if isJust nextk then [q] else []
-                     state3 = LvState ((sTs statek) + 1) (qs ++ thisq) (update idx nstate' nstates) cvs ivs
-                     fireIndicator st (pidx, v) = 
-                        case v of
-                        Nothing -> st
-                        Just val -> fire val (LvPortAddr LvN idx pidx) st -- TODO test
-                  in
-                     if isJust nextk
-                     then state3
-                     else foldl' fireIndicator state3 (zip (indices indics) (toList $ sIndicatorValues statek))
-                     -- TODO fire exits when for finishes
-
-               LvWhile ->
-                  state1 -- TODO initialize state, run structure, boolean must be wired
-
+                              else trc ("let's go " @@ (i + 1)) $
+                                 trc ("before: " @@ statek) $ Just (LvKState (nextStep vi statek (i + 1)))
+                                 where (LvI32 i) = getControl statek iIndex (LvI32 999)
+                        nstate' = (LvNodeState name nextk values)
+                        thisq = if isJust nextk then [q] else []
+                        state3 = LvState ((sTs statek) + 1) (qs ++ thisq) (update idx nstate' nstates) cvs ivs
+                        fireIndicator st (pidx, v) = 
+                           trc ("indicator " @@ (pidx, v)) $
+                           case v of
+                           Nothing -> st
+                           Just val -> fire val (LvPortAddr LvN idx pidx) st -- TODO test
+                     in
+                        if isJust nextk
+                        then state3
+                        else trc "firing indicators" $ foldl' fireIndicator state3 (zip (indices indics) (toList $ sIndicatorValues statek))
+               in
+                  trc ("firing structure " @@ typ) $
+                  case typ of
+   
+                  LvFor -> runLoop vi shouldStop
+                     where
+                        shouldStop st =
+                           trc (i' @@ " >= " @@ n) $ (i' >= n)
+                           where
+                              (LvI32 i) = getControl st iIndex (LvI32 0)
+                              i' = i + 1
+                              LvI32 n = coerceToInt $ getControl st nIndex (LvI32 0)
+                              
+                  LvWhile -> runLoop vi shouldStop
+                     where
+                        shouldStop st =
+                           not test
+                           where
+                              (LvBoolean test) = getIndicator st testIndex (error "test boolean in 'while' must be set")
+      
             LvFeedbackNode initVal ->
                let
                   inputVal = inlets !! 0
                in
                   fire (fromMaybe initVal inputVal) (LvPortAddr LvN idx 0) state1
+   where
 
    shouldSchedule :: Int -> Seq (Maybe LvValue) -> Bool
    shouldSchedule nidx inlets =
@@ -485,8 +509,6 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) (LvVI (LvPanel cont
 -- Example programs
 -- ========================================
 
--- TODO test a while with a tunnel
-
 -- TestingFor.vi
 -- On continuous run, running this with 0 in the input produces 0,
 -- incrementing to 1 it remains at 0, and
@@ -506,8 +528,8 @@ testingFor =
             --("0", LvConstant (LvDBL 0.00)), -- ***
             ("For loop", LvStructure LvFor (makeVI
                [ -- controls
-                  ("N", LvTunControl),
                   ("i", LvAutoControl),
+                  ("N", LvTunControl),
                   ("shift reg out", LvSRControl (LvDBL 0.0))
                ]
                [ -- indicators
@@ -544,8 +566,8 @@ testingFor2 =
             ("20", LvConstant (LvDBL 20.00)),
             ("For loop", LvStructure LvFor (makeVI
                [ -- controls
-                  ("N", LvTunControl),
                   ("i", LvAutoControl),
+                  ("N", LvTunControl),
                   ("shift reg out", LvTunSRControl)
                ]
                [ -- indicators
@@ -569,6 +591,79 @@ testingFor2 =
             zwire "out" "indicator"
          ]            
 
+-- TestingWhile.vi
+-- Numeric2 only sets after the for-loop is done,
+-- this means the while-loop only starts after its input tunnels have data.
+testingWhile =
+   makeVI
+         [ -- controls
+            ("input", LvControl (LvDBL 10.0))
+         ]
+         [ -- indicators
+            ("indicator", LvIndicator (LvDBL (-999.0)))
+         ]
+         [ -- nodes
+            --("0", LvConstant (LvDBL 0.00)), -- ***
+            ("For loop", LvStructure LvFor (makeVI
+               [ -- controls
+                  ("i", LvAutoControl),
+                  ("N", LvTunControl),
+                  ("shift reg out", LvSRControl (LvDBL 0.0))
+               ]
+               [ -- indicators
+                  ("shift reg in", LvSRIndicator 2),
+                  ("out", LvTunIndicator LvLastValue)
+               ]
+               [ -- nodes
+                  ("+", LvFunction "+"),
+                  ("WaitUntilNextMs", LvFunction "WaitUntilNextMs"),
+                  ("1000", LvConstant (LvI32 1000))
+               ]
+               [ -- wires
+                  nwire "shift reg out" 0 "+" 0,
+                  nwire "i" 0             "+" 1,
+                  zwire "+" "shift reg in",
+                  zwire "+" "out",
+                  zwire "1000" "WaitUntilNextMs"
+               ]
+            )),
+            ("While loop", LvStructure LvWhile (makeVI
+               [ -- controls
+                  ("i", LvAutoControl),
+                  ("while tunnel", LvTunControl)
+               ]
+               [ -- indicators
+                  ("Test", LvIndicator (LvBoolean True)),
+                  ("Numeric", LvIndicator (LvDBL 0.0)),
+                  ("Numeric 2", LvIndicator (LvDBL 0.0))
+               ]
+               [ -- nodes
+                  ("+", LvFunction "+"),
+                  ("<", LvFunction "<"),
+                  ("WaitUntilNextMs", LvFunction "WaitUntilNextMs"),
+                  ("100", LvConstant (LvI32 100)),
+                  ("1000", LvConstant (LvI32 1000)),
+                  ("12345", LvConstant (LvI32 12345))
+               ]
+               [ -- wires
+                  nwire "i" 0 "<" 0,
+                  nwire "1000" 0 "<" 1,
+                  nwire "while tunnel" 0 "+" 1,
+                  nwire "while tunnel" 0 "+" 1,
+                  zwire "+" "Numeric",
+                  zwire "12345" "Numeric 2",
+                  zwire "100" "WaitUntilNextMs",
+                  zwire "<" "Test"
+               ]
+            ))
+         ]
+         [ -- wires
+            --zwire "0" "shift reg out", -- ***
+            zwire "input" "N",
+            zwire "out" "indicator",
+            zwire "out" "while tunnel"
+         ]
+
 example1 =
    makeVI
          [ -- controls
@@ -583,8 +678,8 @@ example1 =
             ("Delay * 1000", LvFunction "*"),
             ("For loop", LvStructure LvFor (makeVI
                [ -- controls
-                  ("N", LvTunControl),
                   ("i", LvAutoControl),
+                  ("N", LvTunControl),
                   ("delay tunnel", LvTunControl),
                   ("* tunnel", LvTunControl)
                ]
@@ -636,8 +731,8 @@ randomXY =
             ("Delay * 1000", LvFunction "*"),
             ("For loop", LvStructure LvFor (makeVI
                [ -- controls
-                  ("N", LvTunControl),
                   ("i", LvAutoControl),
+                  ("N", LvTunControl),
                   ("delay tunnel", LvTunControl),
                   ("* tunnel", LvTunControl),
                   ("feedback loop tunnel", LvTunControl)
@@ -702,15 +797,16 @@ randomXY =
             zwire "bundle" "XY graph"
          ]
 
-loop (state, go) program =
+loop state@(LvState _ q _ _ _) program =
    do
-      print state
-      if go
-      then loop (run state program) program 
-      else return ()
+      trc (show state) (
+         if not $ null q
+         then loop (run state program) program 
+         else return ()
+         )
 
 main = 
    let
-      program = testingFor
+      program = testingWhile
    in 
-      loop (initialState 0 program, True) program
+      trc (show program) $ loop (initialState 0 program) program
