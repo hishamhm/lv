@@ -67,15 +67,15 @@ data LvPanel = LvPanel
                   [(String, LvIndicator)]
    deriving Show
 
-data LvType = LvN
-            | LvC
-            | LvI
+data LvNodeType = LvN
+                | LvC
+                | LvI
    deriving (Show, Eq)
 
-data LvPortAddr = LvPortAddr LvType Int Int
+data LvPortAddr = LvPortAddr LvNodeType Int Int
    deriving Eq
 
-data LvNodeAddr = LvNodeAddr LvType Int
+data LvNodeAddr = LvNodeAddr LvNodeType Int
    deriving Eq
 
 data LvWire = LvWire {
@@ -168,7 +168,7 @@ makeVI :: [(String, LvControl)] -> [(String, LvIndicator)] -> [(String, LvNode)]
 makeVI controls indicators nodes stringWires =
    LvVI (LvPanel controls indicators) (LvDiagram nodes wires)
    where
-      findNode :: FromTo -> String -> Int -> (LvType, Int, Int)
+      findNode :: FromTo -> String -> Int -> (LvNodeType, Int, Int)
       findNode side name port =
          let
             pickSide :: a -> a -> a
@@ -617,14 +617,14 @@ testingWhile =
                [ -- nodes
                   ("+", LvFunction "+"),
                   ("WaitUntilNextMs", LvFunction "WaitUntilNextMs"),
-                  ("1000", LvConstant (LvI32 1000))
+                  ("100", LvConstant (LvI32 100))
                ]
                [ -- wires
                   nwire "shift reg out" 0 "+" 0,
                   nwire "i" 0             "+" 1,
                   zwire "+" "shift reg in",
                   zwire "+" "out",
-                  zwire "1000" "WaitUntilNextMs"
+                  zwire "100" "WaitUntilNextMs"
                ]
             )),
             ("While loop", LvStructure LvWhile (makeVI
@@ -641,18 +641,18 @@ testingWhile =
                   ("+", LvFunction "+"),
                   ("<", LvFunction "<"),
                   ("WaitUntilNextMs", LvFunction "WaitUntilNextMs"),
-                  ("100", LvConstant (LvI32 100)),
-                  ("1000", LvConstant (LvI32 1000)),
+                  ("10", LvConstant (LvI32 10)),
+                  ("50", LvConstant (LvI32 50)),
                   ("12345", LvConstant (LvI32 12345))
                ]
                [ -- wires
                   nwire "i" 0 "<" 0,
-                  nwire "1000" 0 "<" 1,
-                  nwire "while tunnel" 0 "+" 1,
+                  nwire "50" 0 "<" 1,
+                  nwire "i" 0 "+" 0,
                   nwire "while tunnel" 0 "+" 1,
                   zwire "+" "Numeric",
                   zwire "12345" "Numeric 2",
-                  zwire "100" "WaitUntilNextMs",
+                  zwire "10" "WaitUntilNextMs",
                   zwire "<" "Test"
                ]
             ))

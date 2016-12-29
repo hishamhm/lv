@@ -2,7 +2,24 @@
 local re = require("relabel")
 local inspect = require("inspect")
 
-local state_grammar = re.compile [[
+local types = [[
+
+   LvNodeType <- 'LvN' / 'LvC' / 'LvI'
+
+   LvValue <- 'LvDBL ' Double
+            / 'LvI32 ' Int
+            / 'LvBoolean ' Boolean
+            / 'LvString ' String
+
+   Int <- { '-'? [0-9]+ }
+   Double <- { posdouble } / '(' { '-' posdouble } ')'
+   posdouble <- [0-9]+ '.' [0-9]+
+   String <- '"' { [^"]* } '"'
+   Boolean <- { 'True' / 'False' }
+
+]]
+
+local state_grammar = re.compile([[
    LvState <- 'LvState {' {|
       {:ts:               sTs :} ', '
       {:sched:            sSched :} ', '
@@ -11,7 +28,7 @@ local state_grammar = re.compile [[
       {:indicator_values: sIndicatorValues :}
    |} '}'
    
-   sTs              <- 'sTs = ' int
+   sTs              <- 'sTs = ' Int
    sSched           <- 'sSched = ' LvNodeAddr_list
    sNodeStates      <- 'sNodeStates = ' Seq_LvNodeState
    sControlValues   <- 'sControlValues = ' Seq_Maybe_LvValue
@@ -25,8 +42,7 @@ local state_grammar = re.compile [[
    Seq_LvNodeState   <- 'fromList ' LvNodeState_list
    Seq_Maybe_LvValue <- 'fromList ' Maybe_LvValue_list
 
-   LvNodeAddr <- { '{' {:type: LvType :} ' ' {:port: int :} '}' }
-   LvType <- 'LvN' / 'LvC' / 'LvI'
+   LvNodeAddr <- { '{' {:type: LvNodeType :} ' ' {:port: Int :} '}' }
 
    LvNodeState <- 'LvNodeState {' {|
       {:name:   nsName :} ', '
@@ -34,46 +50,308 @@ local state_grammar = re.compile [[
       {:inlets: nsInlets :}
    |} '}'
 
-   nsName <- 'nsName = ' string
+   nsName <- 'nsName = ' String
    nsCont <- 'nsCont = ' Maybe_LvCont
    nsInlets <- 'nsInlets = ' Seq_Maybe_LvValue
 
-   Maybe_LvCont  <- {| 'Nothing' / 'Just ' LvCont |}
+   Maybe_LvCont  <- {| 'Nothing' |} / 'Just ' LvCont
    Maybe_LvValue <- 'Nothing' / 'Just (' LvValue ')'
 
    LvCont <- 'KFunction(' LvValue_list ')'
            / 'KState[' LvState ']'
 
-   LvValue <- 'LvDBL ' double
-            / 'LvI32 ' int
-            / 'LvBoolean ' bool
-            / 'LvString ' string
+]] .. types)
 
-   int <- { '-'? [0-9]+ }
-   double <- { posdouble / '(-' posdouble ')' }
-   posdouble <- [0-9]+ '.' [0-9]+
-   string <- '"' { [^"]* } '"'
-   bool <- { 'True' / 'False' }
-]]
+local vi_grammar = re.compile([[
+   LvVI <- 'LvVI ' {|
+      '(' {:panel:   LvPanel   :} ') '
+      '(' {:diagram: LvDiagram :} ')'
+   |} 
+   
+   LvPanel <- 'LvPanel ' {| {:controls: String_LvControl_pair_list :} ' ' {:indicators: String_LvIndicator_pair_list :} |}
 
---[=[
-local vi_grammar = re.compile [[
-]]
-]=]
+   String_LvControl_pair_list   <- '[' {| (String_LvControl_pair   (',' String_LvControl_pair)*   )? |} ']'
+   String_LvIndicator_pair_list <- '[' {| (String_LvIndicator_pair (',' String_LvIndicator_pair)* )? |} ']'
+   String_LvNode_pair_list      <- '[' {| (String_LvNode_pair      (',' String_LvNode_pair)*      )? |} ']'
+   LvWire_list                  <- '[' {| (LvWire                  (',' LvWire)*                  )? |} ']'
+
+   String_LvControl_pair   <- '(' {| {:name: String :} ',' LvControl   |} ')'
+   String_LvIndicator_pair <- '(' {| {:name: String :} ',' LvIndicator |} ')'
+   String_LvNode_pair      <- '(' {| {:name: String :} ',' LvNode      |} ')'
+
+   LvControl <- {:type: 'LvControl'      :} ' (' LvValue ')'
+              / {:type: 'LvAutoControl'  :}
+              / {:type: 'LvTunControl'   :}
+              / {:type: 'LvTunSRControl' :}
+              / {:type: 'LvSRControl'    :} ' (' LvValue ')'
+   
+   LvIndicator <- {:type: 'LvIndicator'    :} ' (' LvValue ')'
+                / {:type: 'LvTunIndicator' :} ' ' LvTunnelMode
+                / {:type: 'LvSRIndicator'  :} ' ' Int
+   
+   LvTunnelMode <- 'LvAutoIndexing'
+                 / 'LvLastValue'
+                    
+   LvStrucType <- 'LvWhile' / 'LvFor'
+   
+   LvDiagram <- 'LvDiagram {' {|
+      {:nodes: dNodes :} ', '
+      {:wires: dWires :}
+   |} '}'
+
+   dNodes <- 'dNodes = ' String_LvNode_pair_list
+   dWires <- 'dWires = ' LvWire_list
+
+   LvNode <- {:type: 'LvSubVI'        :} ' '  sub_vi
+           / {:type: 'LvFunction'     :} ' '  {:fname: String      :}
+           / {:type: 'LvConstant'     :} ' (' {:value: LvValue     :} ')'
+           / {:type: 'LvStructure'    :} ' '  {:stype: LvStrucType :} ' ' sub_vi
+           / {:type: 'LvFeedbackNode' :} ' (' {:value: LvValue     :} ')'
+   
+   sub_vi <- {:vi: '(' LvVI ')' :}
+
+   LvWire <- 'LvWire {' {|
+      {:src: 'wSrc = ' LvPortAddr :} ', '
+      {:dst: 'wDst = ' LvPortAddr :}
+   |} '}'
+
+   LvPortAddr <- {| '{' {:type: LvNodeType :} ' ' {:nidx: Int :} ', ' {:pidx: Int :} '}' |}
+
+]] .. types)
 
 local function parse(grammar, line)
-   local state, err, max = grammar:match(line)
-   if not state then
+   local object, err, max = grammar:match(line)
+   if not object then
       print(err, max)
-      return
+      return nil
    end
-   print(inspect(state))
+   --print(inspect(object))
+   return object
 end
+
+local functions = {
+   ["+"] = { inputs = {"x", "y"}, outputs = {"="} },
+   ["*"] = { inputs = {"x", "y"}, outputs = {"="} },
+   ["<"] = { inputs = {"x", "y"}, outputs = {"="} },
+   ["ArrayMax&Min"] = { inputs = {"in"}, outputs = {"max","min"} },
+   ["Bundle"] = { inputs = {"a1","a2"}, outputs = {"aout"} },
+   ["InsertIntoArray"] = { inputs = {"arr", "data"}, outputs = {"arr"} },
+   ["RandomNumber"] = { inputs = 0, outputs = {"rnd"} },
+   ["WaitUntilNextMs"] = { inputs = {"ms"}, outputs = {} },
+}
+
+local function label_for_function(name)
+   local ins, outs = functions[name].inputs, functions[name].outputs
+   local trs = math.max(#ins, #outs)
+   local function cell(ports, i, prefix)
+      if i <= #ports then
+         local is_last = ''
+         if i == #ports and i < trs then
+            is_last = ('rowspan="%d"'):format(trs - #ports + 1)
+         end
+         return ('<td %s port="%s%d">%s</td>'):format(is_last, prefix, i-1, ports[i])
+      end
+      return ''
+   end
+   local out = { '<<table border="0" cellborder="1" cellspacing="0" cellpadding="4">' }
+   table.insert(out, '<tr>')
+   table.insert(out, '<td colspan="2">'..name:gsub(">", "&gt;"):gsub("<", "&lt;")..'</td>')
+   table.insert(out, '</tr>')
+   for i = 1, trs do
+      table.insert(out, '<tr>')
+      table.insert(out, cell(ins, i, "in"))
+      table.insert(out, cell(outs, i, "out"))
+      table.insert(out, '</tr>')
+   end
+   table.insert(out, '</table>>')
+   return table.concat(out)
+end
+
+local function vi_to_graph(vi, graph_name, attributes)
+   local function safe(name) return graph_name.."_"..name:gsub(" ", "_"):gsub("%+","plus"):gsub("<","lt") end
+   local cluster_name = (graph_name == "G") and "G" or ("cluster_" .. graph_name)
+   local graph = { name = cluster_name, cindex = {}, iindex = {}, nindex = {}, nodes = {}, edges = {}, subgraphs = {}, attributes = attributes or {} }
+   for i, node in pairs(vi.panel.controls) do
+      local name = safe(node.name)
+      graph.nodes[name] = { name = name, attributes = { label = node.name, shape = "octagon" } }
+      graph.cindex[i-1] = name
+   end
+   for i, node in pairs(vi.panel.indicators) do
+      local name = safe(node.name)
+      graph.nodes[name] = { name = name, attributes = { label = node.name, shape = "doubleoctagon" } }
+      graph.iindex[i-1] = name
+   end
+   for i, node in pairs(vi.diagram.nodes) do
+      local name = safe(node.name)
+      if node.type == "LvSubVI" then
+         graph.subgraphs[name] = vi_to_graph(node.vi, name, {label = node.name, shape = "box"} )
+         graph.nindex[i-1] = graph.subgraphs[name]
+      elseif node.type == "LvStructure" then
+         graph.subgraphs[name] = vi_to_graph(node.vi, name, {label = node.stype, shape = "Msquare"} )
+         graph.nindex[i-1] = graph.subgraphs[name]
+      elseif node.type == "LvFunction" then
+         name = "Function_" .. name
+         graph.nodes[name] = { name = name, attributes = { shape = "none", margin="0", label = label_for_function(node.fname) } }
+         graph.nindex[i-1] = name
+      elseif node.type == "LvConstant" then
+         graph.nodes[name] = { name = name, attributes = { shape = "box", label = node.name } }
+         graph.nindex[i-1] = name
+      elseif node.type == "LvFeedbackNode" then
+         graph.nodes[name] = { name = name, attributes = { shape = "box", label = "<-", peripheries = 2 } }
+         graph.nindex[i-1] = name
+      end
+   end
+   local function decode_wire(wire, prefix)
+      local nidx = tonumber(wire.nidx)
+      local pidx = tonumber(wire.pidx)
+      if wire.type == "LvC" then
+         return graph.cindex[nidx]
+      elseif wire.type == "LvI" then
+         return graph.iindex[nidx]
+      elseif wire.type == "LvN" then
+         if type(graph.nindex[nidx]) == "string" then
+            local name = graph.nindex[nidx]
+            if name:match("^Function_") then
+               return graph.nindex[nidx]..":"..prefix..pidx
+            else
+               assert(pidx == 0)
+               return graph.nindex[nidx]
+            end
+         else
+            if prefix == "out" then
+               return graph.nindex[nidx].iindex[pidx]
+            else
+               return graph.nindex[nidx].cindex[pidx]
+            end
+         end
+      end
+   end
+   for _, wire in pairs(vi.diagram.wires) do
+      local src = decode_wire(wire.src, "out")
+      local dst = decode_wire(wire.dst, "in")
+      local probe = "probe_"..dst:gsub(":", "__")
+      graph.nodes[probe] = { name = probe, attributes = { label = "?", fixedsize = "true", width=0.6, height=0.3, style = "rounded", shape = "box" } }
+      table.insert(graph.edges, {src, probe, attributes = { dir = "none" }})
+      table.insert(graph.edges, {probe, dst})
+   end
+   return graph
+end
+
+local function write_graph(graph, filename)
+   local fd = io.open(filename, "w")
+
+   local function safe_attr(v)
+      if v:match("^<") or v:match("^[A-Za-z0-9_]+$") then
+         return v
+      else
+         return '"'..v..'"'
+      end
+   end
+
+   local function try_attributes(attributes) 
+      if attributes and next(attributes) then
+         fd:write(" [")
+         local out = {}
+         for k, v in pairs(attributes) do
+            table.insert(out, k.."="..safe_attr(tostring(v)))
+         end
+         fd:write(table.concat(out, ","))
+         fd:write("]")
+      end
+   end
+
+   local function write_nodes(nodes)
+      for _, node in pairs(nodes) do
+         fd:write(node.name)
+         try_attributes(node.attributes)
+         fd:write(";\n")
+      end
+   end
+   
+   local function write_edges(edges)
+      for _, edge in ipairs(edges) do
+         fd:write(edge[1].." -> "..edge[2])
+         try_attributes(edge.attributes)
+         fd:write(";\n")
+      end
+   end
+
+   local function write_attributes(attributes)
+      for k, v in pairs(attributes) do
+         fd:write(k.."="..safe_attr(v)..";\n")
+      end
+   end
+
+   local write_subgraph
+   local function write_subgraphs(subgraphs)
+      for _, subgraph in pairs(subgraphs) do
+         write_subgraph(subgraph, "subgraph")
+      end
+   end
+
+   write_subgraph = function(graph, kind)
+      fd:write(kind, " "..graph.name.." {\n")
+      write_nodes(graph.nodes)
+      write_edges(graph.edges)
+      write_subgraphs(graph.subgraphs)
+      write_attributes(graph.attributes)
+      fd:write("}\n")
+   end
+   
+   write_subgraph(graph, "digraph")
+   fd:close()
+end
+
+local function adjust_probes(graph, state)
+   for i, control_value in ipairs(state.control_values) do
+      graph.nodes[graph.cindex[i-1]].attributes.label = control_value
+   end
+   for i, indicator_value in ipairs(state.indicator_values) do
+      local probe = "probe_" .. graph.iindex[i-1]
+      graph.nodes[probe].attributes.label = indicator_value
+   end
+   for i, node_state in ipairs(state.node_states) do
+      local node = graph.nindex[i-1]
+      if type(node) == "string" then
+         for j, inlet_value in ipairs(node_state.inlets) do
+            local probe = "probe_" .. node .. "__in" .. (j-1)
+            graph.nodes[probe].attributes.label = inlet_value
+         end
+      else
+         for j, inlet_value in ipairs(node_state.inlets) do
+            local probe = "probe_" .. node.cindex[j-1]
+            if graph.nodes[probe] then
+               graph.nodes[probe].attributes.label = inlet_value
+            end
+         end
+         if next(node_state.cont) then
+            adjust_probes(node, node_state.cont)
+         end
+      end
+   end
+end
+
+local vi 
+local graph
+local frame = 1
 
 for line in io.stdin:lines() do
    if line:match("^LvState") then
-      parse(state_grammar, line)
+      local state = parse(state_grammar, line)
+      adjust_probes(graph, state)
+      graph.attributes.label = "ts = "..state.ts
+      write_graph(graph, "graph-"..("%07d"):format(frame)..".dot")
+      frame = frame + 1
    elseif line:match("^LvVI") then
---      parse(vi_grammar, line)
+      vi = parse(vi_grammar, line)
+      if not vi then
+         os.exit(1)
+      end
+      graph = vi_to_graph(vi, "G")
+      --print(inspect(graph))
+      graph.attributes.rankdir = "LR"
+      graph.attributes.label = "ts = 0"
+      write_graph(graph, "graph-"..("%07d"):format(frame)..".dot")
+      frame = frame + 1
    end
 end
