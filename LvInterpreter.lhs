@@ -334,14 +334,14 @@ run :: LvState -> LvVI -> LvState
 
 run state@(LvState _ [] _ _ _) vi = state
 
-run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) vi =
+run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) mainVi =
    let
       state0 = LvState (ts + 1) qs nstates cvs ivs
    in
       case typ of
    
       LvC ->
-         fire (fromMaybe (trc ("maybe???" @@@ cvs @@@ idx) $ undefined) $ index cvs idx) (LvPortAddr LvC idx 0) state0
+         fire mainVi (fromMaybe (trc ("maybe???" @@@ cvs @@@ idx) $ undefined) $ index cvs idx) (LvPortAddr LvC idx 0) state0
          
       LvN ->
          let
@@ -358,11 +358,11 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) vi =
                Nothing -> toList values
                Just (LvKFunction kfn kargs) -> map Just kargs
                Just (LvKState st) -> trc "reading inlets from KState!?" $ undefined
-            (name, node) = vNodes vi !! idx
+            (name, node) = vNodes mainVi !! idx
          in
             case node of
             
-            LvSubVI vi -> state1 -- TODO initialize state, run subvi
+            LvSubVI subVi -> state1 -- TODO initialize state, run subvi
             
             LvFunction name ->
                let
@@ -375,7 +375,7 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) vi =
                   case ret of
                   LvReturn outVals ->
                      let
-                        firePort st pidx = fire (outVals !! pidx) (LvPortAddr LvN idx pidx) st
+                        firePort st pidx = fire mainVi (outVals !! pidx) (LvPortAddr LvN idx pidx) st
                         state2 = updateNode state1 (LvNodeState name Nothing values) []
                      in
                         foldl' firePort state2 (indices outVals)
@@ -384,20 +384,20 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) vi =
 
             LvConstant value ->
                trc ("firing constant " @@ value) $
-               fire value (LvPortAddr LvN idx 0) state1
+               fire mainVi value (LvPortAddr LvN idx 0) state1
 
-            LvStructure typ vi ->
+            LvStructure typ subVi ->
                let
                   getControl   st idx def = fromMaybe def $ (\state@(LvState ts qs ns cvs ivs) -> index cvs idx) st
                   getIndicator st idx def = fromMaybe def $ (\state@(LvState ts qs ns cvs ivs) -> index ivs idx) st
                   
-                  runLoop vi shouldStop =
+                  runLoop loopVi shouldStop =
                      let
                         state2 = 
                            case k of
-                           Nothing -> initCounter $ feedInletsToVi inlets $ initialState ((sTs state1) + 1) vi
+                           Nothing -> initCounter $ feedInletsToVi inlets $ initialState ((sTs state1) + 1) loopVi
                            Just (LvKState st) -> st
-                        statek@(LvState _ qk _ _ _) = run state2 vi
+                        statek@(LvState _ qk _ _ _) = run state2 loopVi
                         nextk =
                            if not $ null qk
                            then Just (LvKState statek)
@@ -405,7 +405,7 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) vi =
                               if shouldStop statek
                               then Nothing
                               else trc ("let's go " @@ (i + 1)) $
-                                 trc ("before: " @@ statek) $ Just (LvKState (nextStep vi statek (i + 1)))
+                                 trc ("before: " @@ statek) $ Just (LvKState (nextStep loopVi statek (i + 1)))
                                  where (LvI32 i) = getControl statek iIndex (LvI32 999)
                         nstate' = (LvNodeState name nextk values)
                         thisq = if isJust nextk then [q] else []
@@ -414,16 +414,16 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) vi =
                            trc ("indicator " @@ (pidx, v)) $
                            case v of
                            Nothing -> st
-                           Just val -> fire val (LvPortAddr LvN idx pidx) st -- TODO test
+                           Just val -> fire mainVi val (LvPortAddr LvN idx pidx) st -- TODO test
                      in
                         if isJust nextk
                         then state3
-                        else trc "firing indicators" $ foldl' fireIndicator state3 (zip (indices $ vIndicators vi) (toList $ sIndicatorValues statek))
+                        else trc "firing indicators" $ foldl' fireIndicator state3 (zip (indices $ vIndicators loopVi) (toList $ sIndicatorValues statek))
                in
                   trc ("firing structure " @@ typ) $
                   case typ of
    
-                  LvFor -> runLoop vi shouldStop
+                  LvFor -> runLoop subVi shouldStop
                      where
                         shouldStop st =
                            trc (i' @@ " >= " @@ n) $ (i' >= n)
@@ -432,7 +432,7 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) vi =
                               i' = i + 1
                               LvI32 n = coerceToInt $ getControl st nIndex (LvI32 0)
                               
-                  LvWhile -> runLoop vi shouldStop
+                  LvWhile -> runLoop subVi shouldStop
                      where
                         shouldStop st =
                            not test
@@ -443,38 +443,37 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) vi =
                let
                   inputVal = inlets !! 0
                in
-                  fire (fromMaybe initVal inputVal) (LvPortAddr LvN idx 0) state1
-   where
+                  fire mainVi (fromMaybe initVal inputVal) (LvPortAddr LvN idx 0) state1
 
-   fire :: LvValue -> LvPortAddr -> LvState -> LvState
-   fire value addr state =
-      trc ("firing" @@@ addr) $
-      foldl' checkWire state (vWires vi)
-         where
-         checkWire state (LvWire src dst) =
-            if addr == src
-            then propagate dst state
-            else state
-         updatePort port value set = update port (Just value) set
-         propagate dst@(LvPortAddr dtype dnode dport) (LvState ts sched nstates cvs ivs) =
-            trc ("propagating wire " @@ dst) $
-            if dtype == LvI
-            then LvState (ts + 1) sched nstates cvs (updatePort dnode value ivs)
-            else
-               let
-                  nstate@(LvNodeState name k inlets) = index nstates dnode
-                  inlets' = updatePort dport value inlets
-                  nstate' = LvNodeState name k inlets' -- FIXME continuation
-                  nstates' = update dnode nstate' nstates
-                  sched' =
-                     let
-                        entry = LvNodeAddr dtype dnode
-                     in
-                        if trc ("should schedule " @@ dnode @@ "?") $ tsi $ (shouldSchedule (vNodes vi !! dnode) inlets' && not (entry `elem` sched))
-                        then sched ++ [entry]
-                        else sched
-               in
-                  LvState (ts + 1) sched' nstates' cvs ivs
+fire :: LvVI -> LvValue -> LvPortAddr -> LvState -> LvState
+fire vi value addr state =
+   trc ("firing" @@@ addr) $
+   foldl' checkWire state (vWires vi)
+      where
+      checkWire state (LvWire src dst) =
+         if addr == src
+         then propagate dst state
+         else state
+      updatePort port value set = update port (Just value) set
+      propagate dst@(LvPortAddr dtype dnode dport) (LvState ts sched nstates cvs ivs) =
+         trc ("propagating wire " @@ dst) $
+         if dtype == LvI
+         then LvState (ts + 1) sched nstates cvs (updatePort dnode value ivs)
+         else
+            let
+               nstate@(LvNodeState name k inlets) = index nstates dnode
+               inlets' = updatePort dport value inlets
+               nstate' = LvNodeState name k inlets' -- FIXME continuation
+               nstates' = update dnode nstate' nstates
+               sched' =
+                  let
+                     entry = LvNodeAddr dtype dnode
+                  in
+                     if trc ("should schedule " @@ dnode @@ "?") $ tsi $ (shouldSchedule (vNodes vi !! dnode) inlets' && not (entry `elem` sched))
+                     then sched ++ [entry]
+                     else sched
+            in
+               LvState (ts + 1) sched' nstates' cvs ivs
 
 shouldSchedule :: (String, LvNode) -> Seq (Maybe LvValue) -> Bool
 shouldSchedule (name, node) inlets =
