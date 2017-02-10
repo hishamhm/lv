@@ -46,82 +46,95 @@ trc = trace
 
 \section{Representation of programs}
 
-The following types were not implemented: CSG, CDB, CXT (single-precision,
-double-precision and extended-precision complex numbers).
-
 \begin{code}
 
-data LvVI = LvVI {
+data LvVI =  LvVI {
                vControls    :: [(String, LvControl)],
                vIndicators  :: [(String, LvIndicator)],
                vNodes       :: [(String, LvNode)],
                vWires       :: [LvWire]
-            }
+             }
    deriving Show
 
-data LvControl = LvControl LvValue
-               | LvAutoControl
-               | LvTunControl
-               | LvTunSRControl
-               | LvSRControl LvValue
+data LvControl  =  LvControl LvValue
+                |  LvAutoControl
+                |  LvTunControl
+                |  LvTunSRControl
+                |  LvSRControl LvValue
    deriving Show
-
-data LvIndicator = LvIndicator LvValue
-                 | LvTunIndicator LvTunnelMode
-                 | LvSRIndicator Int
-   deriving Show
-
-data LvTunnelMode = LvAutoIndexing -- TODO implement
-                  | LvLastValue
-                  -- TODO list other kinds
-   deriving Show
-
-data LvNode = LvSubVI LvVI
-            | LvFunction String
-            | LvConstant LvValue
-            | LvStructure LvStrucType LvVI
-            | LvFeedbackNode LvValue
-   deriving Show
-
-data LvStrucType = LvWhile
-                 | LvFor
-                 -- TODO LvSequence
-   deriving Show
-
-data LvValue = LvEXT Double
-             | LvDBL Double
-             | LvSGL Float
-             | LvFXP Double
-             | LvI64 Int
-             | LvI32 Int
-             | LvI16 Int
-             | LvI8  Int
-             | LvU64 Int
-             | LvU32 Int
-             | LvU16 Int
-             | LvU8  Int
-             | LvBool Bool
-             | LvString String
-             | LvCluster [LvValue]
-             | LvArray Int LvValue
-   deriving (Show, Eq)
 
 \end{code}
 
 \begin{code}
 
-data LvWire = LvWire {
-                 wSrc :: LvPortAddr,
-                 wDst :: LvPortAddr
-              }
+data LvIndicator  =  LvIndicator LvValue
+                  |  LvTunIndicator LvTunnelMode
+                  |  LvSRIndicator Int
+   deriving Show
+
+\end{code}
+
+\section{Representation of programs}
+
+\begin{code}
+data LvTunnelMode  =  LvAutoIndexing -- TODO implement
+                   |  LvLastValue
+                      -- TODO list other kinds
+   deriving Show
+
+data LvNode  =  LvSubVI LvVI
+             |  LvFunction String
+             |  LvConstant LvValue
+             |  LvStructure LvStrucType LvVI
+             |  LvFeedbackNode LvValue
+   deriving Show
+
+data LvStrucType  =  LvWhile
+                  |  LvFor
+                     -- TODO LvSequence
+   deriving Show
+
+\end{code}
+
+\begin{code}
+
+data LvValue  =  LvEXT Double
+              |  LvDBL Double
+              |  LvSGL Float
+              |  LvFXP Double
+              |  LvI64 Int
+              |  LvI32 Int
+              |  LvI16 Int
+              |  LvI8  Int
+              |  LvU64 Int
+              |  LvU32 Int
+              |  LvU16 Int
+              |  LvU8  Int
+              |  LvBool Bool
+              |  LvString String
+              |  LvCluster [LvValue]
+              |  LvArray Int LvValue
+   deriving (Show, Eq)
+
+\end{code}
+
+The following types were not implemented: CSG, CDB, CXT (single-precision,
+double-precision and extended-precision complex numbers).
+
+\begin{code}
+
+data LvWire =  LvWire {
+                  wSrc :: LvPortAddr,
+                  wDst :: LvPortAddr
+               }
    deriving Show
 
 data LvPortAddr = LvPortAddr LvNodeType Int Int
    deriving Eq
 
-data LvNodeType = LvN
-                | LvC
-                | LvI
+data LvNodeType  =  LvN
+                 |  LvC
+                 |  LvI
    deriving (Show, Eq)
 
 \end{code}
@@ -130,37 +143,37 @@ data LvNodeType = LvN
 
 \begin{code}
 
-data LvState = LvState {
-                  sTs :: Int,
-                  sSched :: [LvNodeAddr],
-                  sNodeStates :: Seq LvNodeState,
-                  sControlValues :: Seq (Maybe LvValue),
-                  sIndicatorValues :: Seq (Maybe LvValue)
-               }
+data LvState =  LvState {
+                   sTs :: Int,
+                   sSched :: [LvNodeAddr],
+                   sNodeStates :: Seq LvNodeState,
+                   sControlValues :: Seq (Maybe LvValue),
+                   sIndicatorValues :: Seq (Maybe LvValue)
+                }
    deriving Show
 
 data LvNodeAddr = LvNodeAddr LvNodeType Int
    deriving Eq
 
-data LvNodeState = LvNodeState {
-                      nsName :: String,
-                      nsCont :: Maybe LvCont,
-                      nsInlets :: Seq (Maybe LvValue)
-                   }
+data LvNodeState =  LvNodeState {
+                       nsName :: String,
+                       nsCont :: Maybe LvCont,
+                       nsInlets :: Seq (Maybe LvValue)
+                    }
    deriving Show
 
-data LvCont = LvKFunction {
-                 kFn :: LvVisibleState -> [LvValue] -> LvReturn,
-                 kArgs :: [LvValue]
-              }
-            | LvKState LvState
+data LvCont  =  LvKFunction {
+                   kFn :: LvVisibleState -> [LvValue] -> LvReturn,
+                   kArgs :: [LvValue]
+                }
+             |  LvKState LvState
+ 
+data LvVisibleState  =  LvVisibleState {
+                           vsTs :: Int
+                        }
 
-data LvVisibleState = LvVisibleState {
-                         vsTs :: Int
-                      }
-
-data LvReturn = LvReturn [LvValue]
-              | LvContinue LvCont
+data LvReturn  =  LvReturn [LvValue]
+               |  LvContinue LvCont
 
 \end{code}
 
