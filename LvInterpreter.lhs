@@ -162,9 +162,6 @@ data LvVisibleState = LvVisibleState {
 data LvReturn = LvReturn [LvValue]
               | LvContinue LvCont
 
-data FromTo = From | To
-   deriving Eq
-
 \end{code}
 
 \section{Utilities}
@@ -206,36 +203,33 @@ makeVI controls indicators nodes stringWires =
    }
    where
       convert :: LvStringWire -> LvWire      
-      convert (LvStringWire (from, fromPort) (to, toPort)) =
+      convert (LvStringWire (src, srcPort) (dst, dstPort)) =
          let
-            (fromType, fromNode, fromPort') = findNode From from fromPort
-            (toType,   toNode,   toPort')   = findNode To   to   toPort
+            (srcType,  srcNode,  srcPort')  = findNode controls    LvC  vIndicators  src  srcPort
+            (dstType,  dstNode,  dstPort')  = findNode indicators  LvI  vControls    dst  dstPort
          in
-            LvWire (LvPortAddr fromType fromNode fromPort') (LvPortAddr toType toNode toPort')
+            LvWire (LvPortAddr srcType srcNode srcPort') (LvPortAddr dstType dstNode dstPort')
 
-      findNode :: FromTo -> String -> Int -> (LvNodeType, Int, Int)
-      findNode side name port =
+      findNode :: [(String, a)] -> LvNodeType -> (LvVI -> [(String, b)]) -> String -> Int -> (LvNodeType, Int, Int)
+      findNode entries etype nodeEntries name port =
          let
-            pickSide :: a -> a -> a
-            pickSide a b = if side == From then a else b
-
-            findPort ctrls indics = elemIndex name $ pickSide (map fst ctrls) (map fst indics)
+            findPort es = elemIndex name $ map fst es
             
             checkNode :: Int -> (String, LvNode) -> Maybe (Int, Int)
             checkNode nodeIdx (_, LvStructure _ nodeVI) =
-               case findPort (vIndicators nodeVI) (vControls nodeVI) of
+               case findPort (nodeEntries nodeVI) of
                   Just i -> Just (nodeIdx, i)
                   Nothing -> Nothing
-            checkNode nodeIdx (nodeName, node) =
-               if name == nodeName
-               then Just (nodeIdx, port)
-               else Nothing
+            checkNode nodeIdx (nodeName, node)
+               | name == nodeName  = Just (nodeIdx, port)
+               | otherwise         = Nothing
          in
-            case findPort controls indicators of
-               Just i -> (pickSide LvC LvI, i, port)
+            case findPort entries of
+               Just i -> (etype, i, port)
                Nothing -> case find isJust $ toList $ mapWithIndex checkNode (fromList nodes) of
                   Just (Just (node, nodePort)) -> (LvN, node, nodePort)
-                  Nothing -> error ("No such wire " ++ name ++ " (attempted to connect port " ++ show port ++ ")")
+                  Nothing -> error ("No such wire " ++ name ++
+                                    " (attempted to connect port " ++ show port ++ ")")
 
 \end{code}
 
