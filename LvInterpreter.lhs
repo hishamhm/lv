@@ -446,23 +446,6 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) vi =
                   fire (fromMaybe initVal inputVal) (LvPortAddr LvN idx 0) state1
    where
 
-   shouldSchedule :: Int -> Seq (Maybe LvValue) -> Bool
-   shouldSchedule nidx inlets =
-      let
-         (name, node) = vNodes vi !! nidx
-      in
-         case node of
-            LvStructure typ vi ->
-               find unfilledTunnel (indices $ vControls vi) == Nothing
-                  where
-                     unfilledTunnel cidx = 
-                        case vControls vi !! cidx of
-                           (name, LvTunControl) -> isNothing (index inlets cidx)
-                           (name, LvTunSRControl) -> isNothing (index inlets cidx)
-                           otherwise -> False
-            otherwise ->
-               elemIndexL Nothing inlets == Nothing -- all inlets have values
-
    fire :: LvValue -> LvPortAddr -> LvState -> LvState
    fire value addr state =
       trc ("firing" @@@ addr) $
@@ -487,11 +470,25 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) vi =
                      let
                         entry = LvNodeAddr dtype dnode
                      in
-                        if trc ("should schedule " @@ dnode @@ "?") $ tsi $ (shouldSchedule dnode inlets' && not (entry `elem` sched))
+                        if trc ("should schedule " @@ dnode @@ "?") $ tsi $ (shouldSchedule (vNodes vi !! dnode) inlets' && not (entry `elem` sched))
                         then sched ++ [entry]
                         else sched
                in
                   LvState (ts + 1) sched' nstates' cvs ivs
+
+shouldSchedule :: (String, LvNode) -> Seq (Maybe LvValue) -> Bool
+shouldSchedule (name, node) inlets =
+   case node of
+      LvStructure typ vi ->
+         find unfilledTunnel (indices $ vControls vi) == Nothing
+            where
+               unfilledTunnel cidx = 
+                  case vControls vi !! cidx of
+                     (name, LvTunControl) -> isNothing (index inlets cidx)
+                     (name, LvTunSRControl) -> isNothing (index inlets cidx)
+                     otherwise -> False
+      otherwise ->
+         elemIndexL Nothing inlets == Nothing -- all inlets have values
 
 loop :: LvState -> LvVI -> IO ()
 loop state@(LvState _ q _ _ _) program =
