@@ -182,14 +182,14 @@ data LvReturn  =  LvReturn [LvValue]
 \begin{code}
 
 instance Show LvPortAddr where
-   show (LvPortAddr typ nidx pidx) = "{" @@ typ @@@ nidx @@ ", " @@ pidx @@ "}"
+   show (LvPortAddr typ nidx pidx) = "{" ++ show typ ++ " " ++ show nidx ++ ", " ++ show pidx ++ "}"
 
 instance Show LvNodeAddr where
-   show (LvNodeAddr typ nidx) = "{" @@ typ @@@ nidx @@ "}"
+   show (LvNodeAddr typ nidx) = "{" ++ show typ ++ " " ++ show nidx ++ "}"
 
 instance Show LvCont where
-   show (LvKFunction fn args) = "KFunction(" @@ args @@ ")"
-   show (LvKState state) = "KState[" @@ state @@ "]"
+   show (LvKFunction fn args) = "KFunction(" ++ show args ++ ")"
+   show (LvKState state) = "KState[" ++ show state ++ "]"
 
 indices l = [0 .. ((length l) - 1)]
 
