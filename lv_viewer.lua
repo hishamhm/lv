@@ -8,7 +8,7 @@ local types = [[
 
    LvValue <- 'LvDBL ' Double
             / 'LvI32 ' Int
-            / 'LvBoolean ' Boolean
+            / 'LvBool ' Boolean
             / 'LvString ' String
 
    Int <- { '-'? [0-9]+ }
@@ -63,12 +63,15 @@ local state_grammar = re.compile([[
 ]] .. types)
 
 local vi_grammar = re.compile([[
-   LvVI <- 'LvVI ' {|
-      '(' {:panel:   LvPanel   :} ') '
-      '(' {:diagram: LvDiagram :} ')'
-   |} 
+   LvVI <- 'LvVI {' {|
+      {:controls:   vControls :} ', '
+      {:indicators: vIndicators :} ', '
+      {:nodes:      vNodes :} ', '
+      {:wires:      vWires :}
+   |} '}'
    
-   LvPanel <- 'LvPanel ' {| {:controls: String_LvControl_pair_list :} ' ' {:indicators: String_LvIndicator_pair_list :} |}
+   vControls   <- 'vControls = '   String_LvControl_pair_list
+   vIndicators <- 'vIndicators = ' String_LvIndicator_pair_list
 
    String_LvControl_pair_list   <- '[' {| (String_LvControl_pair   (',' String_LvControl_pair)*   )? |} ']'
    String_LvIndicator_pair_list <- '[' {| (String_LvIndicator_pair (',' String_LvIndicator_pair)* )? |} ']'
@@ -93,14 +96,9 @@ local vi_grammar = re.compile([[
                  / 'LvLastValue'
                     
    LvStrucType <- 'LvWhile' / 'LvFor'
-   
-   LvDiagram <- 'LvDiagram {' {|
-      {:nodes: dNodes :} ', '
-      {:wires: dWires :}
-   |} '}'
 
-   dNodes <- 'dNodes = ' String_LvNode_pair_list
-   dWires <- 'dWires = ' LvWire_list
+   vNodes <- 'vNodes = ' String_LvNode_pair_list
+   vWires <- 'vWires = ' LvWire_list
 
    LvNode <- {:type: 'LvSubVI'        :} ' '  sub_vi
            / {:type: 'LvFunction'     :} ' '  {:fname: String      :}
@@ -122,7 +120,9 @@ local vi_grammar = re.compile([[
 local function parse(grammar, line)
    local object, err, max = grammar:match(line)
    if not object then
-      print(err, max)
+      print(object, err, max)
+      os.exit(1)
+--      print("Error at " .. line:sub(err))
       return nil
    end
    --print(inspect(object))
@@ -171,17 +171,17 @@ local function vi_to_graph(vi, graph_name, attributes)
    local function safe(name) return graph_name.."_"..name:gsub(" ", "_"):gsub("%+","plus"):gsub("<","lt") end
    local cluster_name = (graph_name == "G") and "G" or ("cluster_" .. graph_name)
    local graph = { name = cluster_name, cindex = {}, iindex = {}, nindex = {}, nodes = {}, edges = {}, subgraphs = {}, attributes = attributes or {} }
-   for i, node in pairs(vi.panel.controls) do
+   for i, node in pairs(vi.controls) do
       local name = safe(node.name)
       graph.nodes[name] = { name = name, attributes = { label = node.name, shape = "octagon" } }
       graph.cindex[i-1] = name
    end
-   for i, node in pairs(vi.panel.indicators) do
+   for i, node in pairs(vi.indicators) do
       local name = safe(node.name)
       graph.nodes[name] = { name = name, attributes = { label = node.name, shape = "doubleoctagon" } }
       graph.iindex[i-1] = name
    end
-   for i, node in pairs(vi.diagram.nodes) do
+   for i, node in pairs(vi.nodes) do
       local name = safe(node.name)
       if node.type == "LvSubVI" then
          graph.subgraphs[name] = vi_to_graph(node.vi, name, {label = node.name, shape = "box"} )
@@ -226,7 +226,7 @@ local function vi_to_graph(vi, graph_name, attributes)
          end
       end
    end
-   for _, wire in pairs(vi.diagram.wires) do
+   for _, wire in pairs(vi.wires) do
       local src = decode_wire(wire.src, "out")
       local dst = decode_wire(wire.dst, "in")
       local probe = "probe_"..dst:gsub(":", "__")
@@ -302,26 +302,32 @@ local function write_graph(graph, filename)
    fd:close()
 end
 
+local function update_probe(graph, probe, val)
+   local tbl = graph.nodes[probe].attributes
+--   tbl.fillcolor = (tbl.value ~= val) and "yellow" or "white"
+   tbl.label = val
+end
+
 local function adjust_probes(graph, state)
    for i, control_value in ipairs(state.control_values) do
       graph.nodes[graph.cindex[i-1]].attributes.label = control_value
    end
    for i, indicator_value in ipairs(state.indicator_values) do
       local probe = "probe_" .. graph.iindex[i-1]
-      graph.nodes[probe].attributes.label = indicator_value
+      update_probe(graph, probe, indicator_value)
    end
    for i, node_state in ipairs(state.node_states) do
       local node = graph.nindex[i-1]
       if type(node) == "string" then
          for j, inlet_value in ipairs(node_state.inlets) do
             local probe = "probe_" .. node .. "__in" .. (j-1)
-            graph.nodes[probe].attributes.label = inlet_value
+            update_probe(graph, probe, inlet_value)
          end
       else
          for j, inlet_value in ipairs(node_state.inlets) do
             local probe = "probe_" .. node.cindex[j-1]
             if graph.nodes[probe] then
-               graph.nodes[probe].attributes.label = inlet_value
+               update_probe(graph, probe, inlet_value)
             end
          end
          if next(node_state.cont) then
