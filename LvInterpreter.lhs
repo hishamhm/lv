@@ -328,6 +328,100 @@ coerceToInt :: LvValue -> LvValue
 coerceToInt v@(LvI32 _) = v
 coerceToInt v@(LvDBL d) = LvI32 (floor d)
 
+runNode (LvSubVI subVi) state1 _ _ _ _ state0 = state1 -- TODO initialize state, run subvi
+
+runNode (LvFunction name) state1 inlets mainVi idx _ state0 =
+   let
+      nstates = sNodeStates state0 -- REFACTOR was 0
+      nstate@(LvNodeState _ k values) = index nstates idx
+      q = (LvNodeAddr LvN idx)
+
+      ret =
+         case k of
+         Nothing -> applyFunction (visible state1) name (catMaybes $ tsi $ inlets)
+         Just kf -> (kFn kf)      (visible state1)      (catMaybes $ tsi $ inlets)
+   in
+      trc ("firing function " @@ name) $
+      case ret of
+      LvReturn outVals ->
+         let
+            firePort st pidx = fire mainVi (outVals !! pidx) (LvPortAddr LvN idx pidx) st
+            state2 = updateNode idx state1 (LvNodeState name Nothing values) []
+         in
+            foldl' firePort state2 (indices outVals)
+      LvContinue k' ->
+         updateNode idx state1 (LvNodeState name (Just k') values) [q]
+
+runNode (LvConstant value) state1 _ mainVi idx _ state0 =
+   trc ("firing constant " @@ value) $
+   fire mainVi value (LvPortAddr LvN idx 0) state1
+
+runNode (LvStructure typ subVi) state1 inlets mainVi idx name state0 =
+   let
+      nstates = sNodeStates state0 -- REFACTOR was 0
+      nstate@(LvNodeState _ k values) = index nstates idx
+      q = (LvNodeAddr LvN idx)
+
+      getControl   st idx def = fromMaybe def $ (\state@(LvState ts qs ns cvs ivs) -> index cvs idx) st
+      getIndicator st idx def = fromMaybe def $ (\state@(LvState ts qs ns cvs ivs) -> index ivs idx) st
+      
+      runLoop loopVi shouldStop =
+         let
+            state2 = 
+               case k of
+               Nothing -> initCounter $ feedInletsToVi inlets $ initialState ((sTs state1) + 1) loopVi
+               Just (LvKState st) -> st
+            statek@(LvState _ qk _ _ _) = run state2 loopVi
+            nextk =
+               if not $ null qk
+               then Just (LvKState statek)
+               else
+                  if shouldStop statek
+                  then Nothing
+                  else trc ("let's go " @@ (i + 1)) $
+                     trc ("before: " @@ statek) $ Just (LvKState (nextStep loopVi statek (i + 1)))
+                     where (LvI32 i) = getControl statek iIndex (LvI32 999)
+            nstate' = (LvNodeState name nextk values)
+            thisq = if isJust nextk then [q] else []
+            state3 = LvState ((sTs statek) + 1) ((sSched state1) ++ thisq) (update idx nstate' nstates) (sControlValues state1) (sIndicatorValues state1) -- REFACTOR state0 to state1
+            fireIndicator st (pidx, v) = 
+               trc ("indicator " @@ (pidx, v)) $
+               case v of
+               Nothing -> st
+               Just val -> fire mainVi val (LvPortAddr LvN idx pidx) st -- TODO test
+         in
+            if isJust nextk
+            then state3
+            else trc "firing indicators" $ foldl' fireIndicator state3 (zip (indices $ vIndicators loopVi) (toList $ sIndicatorValues statek))
+   in
+      trc ("firing structure " @@ typ) $
+      case typ of
+
+      LvFor -> runLoop subVi shouldStop
+         where
+            shouldStop st =
+               trc (i' @@ " >= " @@ n) $ (i' >= n)
+               where
+                  (LvI32 i) = getControl st iIndex (LvI32 0)
+                  i' = i + 1
+                  LvI32 n = coerceToInt $ getControl st nIndex (LvI32 0)
+                  
+      LvWhile -> runLoop subVi shouldStop
+         where
+            shouldStop st =
+               not test
+               where
+                  (LvBool test) = getIndicator st testIndex (error "test boolean in 'while' must be set")
+
+runNode (LvFeedbackNode initVal) state1 inlets mainVi idx _ state0 =
+   let
+      inputVal = inlets !! 0
+   in
+      fire mainVi (fromMaybe initVal inputVal) (LvPortAddr LvN idx 0) state1
+
+updateNode :: Int -> LvState -> LvNodeState -> [LvNodeAddr] -> LvState
+updateNode idx st@(LvState ts qs nstates cvs ivs) newNstate newSched = LvState (ts + 1) (qs ++ newSched) (update idx newNstate nstates) cvs ivs
+
 runThing (LvNodeAddr LvC idx) state0 mainVi =
    fire mainVi (fromMaybe (trc ("maybe???" @@@ cvs @@@ idx) $ undefined) $ index cvs idx) (LvPortAddr LvC idx 0) state0
    where
@@ -336,14 +430,11 @@ runThing (LvNodeAddr LvC idx) state0 mainVi =
 runThing q@(LvNodeAddr LvN idx) state0 mainVi =
    let
       nstates = sNodeStates state0
-
-      updateNode :: LvState -> LvNodeState -> [LvNodeAddr] -> LvState
-      updateNode st@(LvState ts qs nstates cvs ivs) newNstate newSched = LvState (ts + 1) (qs ++ newSched) (update idx newNstate nstates) cvs ivs
-   
       nstate@(LvNodeState _ k values) = index nstates idx
+
       state1 =
          if isNothing k
-         then updateNode state0 (LvNodeState name k (emptyInlets (Data.Sequence.length values))) []
+         then updateNode idx state0 (LvNodeState name k (emptyInlets (Data.Sequence.length values))) []
          else state0
       inlets =
          case k of
@@ -352,90 +443,7 @@ runThing q@(LvNodeAddr LvN idx) state0 mainVi =
          Just (LvKState st) -> trc "reading inlets from KState!?" $ undefined
       (name, node) = vNodes mainVi !! idx
    in
-      case node of
-      
-      LvSubVI subVi -> state1 -- TODO initialize state, run subvi
-      
-      LvFunction name ->
-         let
-            ret =
-               case k of
-               Nothing -> applyFunction (visible state1) name (catMaybes $ tsi $ inlets)
-               Just kf -> (kFn kf)      (visible state1)      (catMaybes $ tsi $ inlets)
-         in
-            trc ("firing function " @@ name) $
-            case ret of
-            LvReturn outVals ->
-               let
-                  firePort st pidx = fire mainVi (outVals !! pidx) (LvPortAddr LvN idx pidx) st
-                  state2 = updateNode state1 (LvNodeState name Nothing values) []
-               in
-                  foldl' firePort state2 (indices outVals)
-            LvContinue k' ->
-               updateNode state1 (LvNodeState name (Just k') values) [q]
-
-      LvConstant value ->
-         trc ("firing constant " @@ value) $
-         fire mainVi value (LvPortAddr LvN idx 0) state1
-
-      LvStructure typ subVi ->
-         let
-            getControl   st idx def = fromMaybe def $ (\state@(LvState ts qs ns cvs ivs) -> index cvs idx) st
-            getIndicator st idx def = fromMaybe def $ (\state@(LvState ts qs ns cvs ivs) -> index ivs idx) st
-            
-            runLoop loopVi shouldStop =
-               let
-                  state2 = 
-                     case k of
-                     Nothing -> initCounter $ feedInletsToVi inlets $ initialState ((sTs state1) + 1) loopVi
-                     Just (LvKState st) -> st
-                  statek@(LvState _ qk _ _ _) = run state2 loopVi
-                  nextk =
-                     if not $ null qk
-                     then Just (LvKState statek)
-                     else
-                        if shouldStop statek
-                        then Nothing
-                        else trc ("let's go " @@ (i + 1)) $
-                           trc ("before: " @@ statek) $ Just (LvKState (nextStep loopVi statek (i + 1)))
-                           where (LvI32 i) = getControl statek iIndex (LvI32 999)
-                  nstate' = (LvNodeState name nextk values)
-                  thisq = if isJust nextk then [q] else []
-                  state3 = LvState ((sTs statek) + 1) ((sSched state0) ++ thisq) (update idx nstate' nstates) (sControlValues state0) (sIndicatorValues state0)
-                  fireIndicator st (pidx, v) = 
-                     trc ("indicator " @@ (pidx, v)) $
-                     case v of
-                     Nothing -> st
-                     Just val -> fire mainVi val (LvPortAddr LvN idx pidx) st -- TODO test
-               in
-                  if isJust nextk
-                  then state3
-                  else trc "firing indicators" $ foldl' fireIndicator state3 (zip (indices $ vIndicators loopVi) (toList $ sIndicatorValues statek))
-         in
-            trc ("firing structure " @@ typ) $
-            case typ of
-
-            LvFor -> runLoop subVi shouldStop
-               where
-                  shouldStop st =
-                     trc (i' @@ " >= " @@ n) $ (i' >= n)
-                     where
-                        (LvI32 i) = getControl st iIndex (LvI32 0)
-                        i' = i + 1
-                        LvI32 n = coerceToInt $ getControl st nIndex (LvI32 0)
-                        
-            LvWhile -> runLoop subVi shouldStop
-               where
-                  shouldStop st =
-                     not test
-                     where
-                        (LvBool test) = getIndicator st testIndex (error "test boolean in 'while' must be set")
-
-      LvFeedbackNode initVal ->
-         let
-            inputVal = inlets !! 0
-         in
-            fire mainVi (fromMaybe initVal inputVal) (LvPortAddr LvN idx 0) state1
+      runNode node state1 inlets mainVi idx name state0
 
 -- TODO this is implying the ordering given in the description of LvVI,
 -- but LabVIEW does not specify it

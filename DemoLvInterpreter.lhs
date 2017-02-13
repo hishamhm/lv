@@ -20,8 +20,10 @@ import LvInterpreter
 \begin{code}
 
 main = 
-   trc (show program) $ loop (initialState 0 program) program
-      where program = testingWhile
+   do
+      print program
+      loop (initialState 0 program) program
+         where program = testingWhile
 
 \end{code}
 

@@ -21,26 +21,29 @@ lv: lv.hs
 	ghc -o lv lv.hs
 
 lhs_lines: DemoLvInterpreter
-	./DemoLvInterpreter 2>&1 | grep "^LvState" > lhs_lines
+	./DemoLvInterpreter 2>/dev/null > lhs_lines
 
 hs_lines: LvInterpreter_hs
-	./lv 2>&1 | grep "^LvState" > hs_lines
+	./lv 2>/dev/null > hs_lines
 
 diff_ok: works.txt lhs_lines
 	diff works.txt lhs_lines > diff_ok
-	[ `stat -c '%s' diff_ok` = 0 ]
+	[ `stat -c '%s' diff_ok` = 0 ] || { touch lhs_lines; exit 1; }
 #diff_ok: hs_lines lhs_lines
 #	diff hs_lines lhs_lines > diff_ok
 #	[ `stat -c '%s' diff_ok` = 0 ]
 
-graph.avi: lv
-	./lv 2>&1 | lua lv_viewer.lua
+graph.avi: graph-0000001.bmp
+	rm -f graph.avi && ffmpeg -f image2 -framerate 2 -i graph-%07d.bmp graph.avi
+
+graph-0000001.bmp: graph-0000001.dot
 	n=$$(ls graph-*.dot | wc -l); for i in $$(seq -f "%07.0f" $$n); do echo $$i/$$n; dot -Tbmp graph-$$i.dot > graph-$$i.bmp; done
-	ffmpeg -f image2 -framerate 25 -i graph-%07d.bmp graph.avi
+
+graph-0000001.dot: DemoLvInterpreter lv_viewer.lua
+	./DemoLvInterpreter 2> /dev/null | /Programs/Lua/5.1.5/bin/lua lv_viewer.lua
 
 clean:
 	rm -f lv.hi lv.o lv LvInterpreter DemoLvInterpreter
 	rm -f graph*bmp
 	rm -f graph*dot
-	rm -f graph.avi
 
