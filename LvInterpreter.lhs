@@ -362,10 +362,9 @@ runNode (LvConstant value) _ state1 _ _ =
    trc ("firing constant " @@ value) $
    (state1, [(0, value)])
 
-runNode (LvStructure typ subVi) state0 state1 inlets idx =
-   trc ("firing structure " @@ typ) $
-   case typ of
-   LvFor -> runLoop subVi shouldStop state0 state1 idx inlets
+runNode (LvStructure LvFor subVi) state0 state1 inlets idx =
+   trc ("firing for") $
+   runLoop subVi shouldStop state0 state1 idx inlets
       where
          shouldStop st =
             trc (i' @@ " >= " @@ n) $ (i' >= n)
@@ -373,8 +372,10 @@ runNode (LvStructure typ subVi) state0 state1 inlets idx =
                (LvI32 i) = getControl st iIndex (LvI32 0)
                i' = i + 1
                LvI32 n = coerceToInt $ getControl st nIndex (LvI32 0)
-               
-   LvWhile -> runLoop subVi shouldStop state0 state1 idx inlets
+
+runNode (LvStructure LvWhile subVi) state0 state1 inlets idx =
+   trc ("firing while") $
+   runLoop subVi shouldStop state0 state1 idx inlets
       where
          shouldStop st =
             not test
