@@ -22,6 +22,7 @@ import qualified Data.Sequence as Seq (length)
 import Data.List
 import Data.Maybe
 import Data.Foldable (toList)
+import Data.Generics.Aliases (orElse)
 
 \end{code}
 
@@ -254,6 +255,7 @@ emptyInlets :: Int -> Seq (Maybe LvValue)
 emptyInlets n = fromList (replicate n Nothing)
 
 -- FIXME schedule while loop
+initialSchedule :: LvVI -> [LvNodeAddr]
 initialSchedule vi = 
    (map (LvNodeAddr LvC) (indices $ vControls vi))
    ++ (map (LvNodeAddr LvN) $ filter (\i -> isBootNode (vNodes vi !! i)) (indices $ vNodes vi))
@@ -289,11 +291,10 @@ initialState ts vi =
       makeIndicatorValue _                = Nothing
 
 feedInletsToVi :: [Maybe LvValue] -> LvState -> LvState
-
 feedInletsToVi inlets state =
    state {
       sTs = (sTs state) + 1,
-      sControlValues = fromList $ map (\(a,b) -> if isNothing a then b else a)
+      sControlValues = fromList $ map (uncurry orElse)
                                 $ zip inlets (toList (sControlValues state))
    }      
 
@@ -322,9 +323,8 @@ nextStep vi state i' =
          where
             shiftRegister :: Seq (Maybe LvValue) -> ((String, LvIndicator), Maybe LvValue) -> Seq (Maybe LvValue)
             shiftRegister cvs ((name, (LvSRIndicator cidx)), ival) = 
-               trc ("shifting" @@@ ival @@@ "to" @@@ cidx) $
-               update cidx (thisOrThat ival (index cvs cidx)) cvs
-                  where thisOrThat a b = if isNothing a then b else a
+               -- % trc ("shifting" @@@ ival @@@ "to" @@@ cidx) $
+               update cidx (ival `orElse` (index cvs cidx)) cvs
             shiftRegister cvs _ = cvs
 
 visible :: LvState -> LvVisibleState
