@@ -333,12 +333,12 @@ coerceToInt :: LvValue -> LvValue
 coerceToInt v@(LvI32 _) = v
 coerceToInt v@(LvDBL d) = LvI32 (floor d)
 
-runNode (LvSubVI subVi) state1 _ _ _ _ state0 = state1 -- TODO initialize state, run subvi
+runNode (LvSubVI subVi) state1 _ _ _ state0 = state1 -- TODO initialize state, run subvi
 
-runNode (LvFunction name) state1 inlets mainVi idx _ state0 =
+runNode (LvFunction name) state1 inlets mainVi idx state0 =
    let
       nstates = sNodeStates state0 -- REFACTOR was 0
-      nstate@(LvNodeState _ k values) = index nstates idx
+      nstate@(LvNodeState name k values) = index nstates idx
       q = (LvNodeAddr LvN idx)
 
       ret =
@@ -357,14 +357,14 @@ runNode (LvFunction name) state1 inlets mainVi idx _ state0 =
       LvContinue k' ->
          updateNode idx state1 (LvNodeState name (Just k') values) [q]
 
-runNode (LvConstant value) state1 _ mainVi idx _ state0 =
+runNode (LvConstant value) state1 _ mainVi idx state0 =
    trc ("firing constant " @@ value) $
    fire mainVi value (LvPortAddr LvN idx 0) state1
 
-runNode (LvStructure typ subVi) state1 inlets mainVi idx name state0 =
+runNode (LvStructure typ subVi) state1 inlets mainVi idx state0 =
    trc ("firing structure " @@ typ) $
    case typ of
-   LvFor -> runLoop subVi shouldStop state0 state1 idx inlets name mainVi
+   LvFor -> runLoop subVi shouldStop state0 state1 idx inlets mainVi
       where
          shouldStop st =
             trc (i' @@ " >= " @@ n) $ (i' >= n)
@@ -373,7 +373,7 @@ runNode (LvStructure typ subVi) state1 inlets mainVi idx name state0 =
                i' = i + 1
                LvI32 n = coerceToInt $ getControl st nIndex (LvI32 0)
                
-   LvWhile -> runLoop subVi shouldStop state0 state1 idx inlets name mainVi
+   LvWhile -> runLoop subVi shouldStop state0 state1 idx inlets mainVi
       where
          shouldStop st =
             not test
@@ -388,7 +388,7 @@ is implied.
 
 \begin{code}
 
-runNode (LvFeedbackNode initVal) state1 inlets mainVi idx _ state0 =
+runNode (LvFeedbackNode initVal) state1 inlets mainVi idx state0 =
    let
       inputVal = inlets !! 0
    in
@@ -425,7 +425,7 @@ runThing q@(LvNodeAddr LvN idx) state0 mainVi =
          Just (LvKState st) -> trc "reading inlets from KState!?" $ undefined
       (name, node) = vNodes mainVi !! idx
    in
-      runNode node state1 inlets mainVi idx name state0
+      runNode node state1 inlets mainVi idx state0
 
 -- TODO this is implying the ordering given in the description of LvVI,
 -- but LabVIEW does not specify it
@@ -498,10 +498,10 @@ loop state@(LvState _ q _ _ _) program =
       then loop (run state program) program 
       else return ()
 
-runLoop loopVi shouldStop state0 state1 idx inlets name mainVi =
+runLoop loopVi shouldStop state0 state1 idx inlets mainVi =
    let
       nstates = sNodeStates state0 -- REFACTOR was 0
-      nstate@(LvNodeState _ k values) = index nstates idx
+      nstate@(LvNodeState name k values) = index nstates idx
       q = (LvNodeAddr LvN idx)
 
       statek = 
