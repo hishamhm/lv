@@ -438,33 +438,40 @@ run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) mainVi =
 
 fire :: LvVI -> LvValue -> LvPortAddr -> LvState -> LvState
 fire vi value addr state =
-   trc ("firing" @@@ addr) $
+   trc ("firing" @@@ addr @@@ "with value" @@@ value @@@ "\tvi <" @@ (take 30 $ show vi) @@ ">\tstate" @@@ state) $!
    foldl' checkWire state (vWires vi)
       where
       checkWire state (LvWire src dst) =
          if addr == src
-         then propagate dst state
+         then propagate value vi dst state
          else state
-      updatePort port value set = update port (Just value) set
-      propagate dst@(LvPortAddr dtype dnode dport) (LvState ts sched nstates cvs ivs) =
-         trc ("propagating wire " @@ dst) $
-         if dtype == LvI
-         then LvState (ts + 1) sched nstates cvs (updatePort dnode value ivs)
-         else
-            let
-               nstate@(LvNodeState name k inlets) = index nstates dnode
-               inlets' = updatePort dport value inlets
-               nstate' = LvNodeState name k inlets' -- FIXME continuation
-               nstates' = update dnode nstate' nstates
-               sched' =
-                  let
-                     entry = LvNodeAddr dtype dnode
-                  in
-                     if trc ("should schedule " @@ dnode @@ "?") $ tsi $ (shouldSchedule (vNodes vi !! dnode) inlets' && not (entry `elem` sched))
-                     then sched ++ [entry]
-                     else sched
-            in
-               LvState (ts + 1) sched' nstates' cvs ivs
+
+propagate value _ dst@(LvPortAddr LvI dnode dport) state =
+   state {
+      sTs = ((sTs state) + 1),
+      sIndicatorValues = update dnode (Just value) (sIndicatorValues state)
+   }
+
+propagate value vi dst@(LvPortAddr dtype dnode dport) state =
+   state {
+      sTs = ((sTs state) + 1),
+      sSched = sched',
+      sNodeStates = nstates'
+   }
+   where
+      sched = sSched state
+      nstates = sNodeStates state
+      nstate@(LvNodeState name k inlets) = index nstates dnode
+      inlets' = update dport (Just value) inlets
+      nstate' = LvNodeState name k inlets' -- FIXME continuation
+      nstates' = update dnode nstate' nstates
+      sched' =
+         let
+            entry = LvNodeAddr dtype dnode
+         in
+            if (shouldSchedule (vNodes vi !! dnode) inlets' && not (entry `elem` sched))
+            then sched ++ [entry]
+            else sched
 
 shouldSchedule :: (String, LvNode) -> Seq (Maybe LvValue) -> Bool
 shouldSchedule (name, node) inlets =
