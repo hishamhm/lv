@@ -323,7 +323,6 @@ nextStep vi state i' =
          where
             shiftRegister :: Seq (Maybe LvValue) -> ((String, LvIndicator), Maybe LvValue) -> Seq (Maybe LvValue)
             shiftRegister cvs ((name, (LvSRIndicator cidx)), ival) = 
-               -- % trc ("shifting" @@@ ival @@@ "to" @@@ cidx) $
                update cidx (ival `orElse` (index cvs cidx)) cvs
             shiftRegister cvs _ = cvs
 
