@@ -250,157 +250,39 @@ makeVI controls indicators nodes stringWires =
 
 \begin{code}
 
--- Produce a sequence of n empty inlets
-emptyInlets :: Int -> Seq (Maybe LvValue)
-emptyInlets n = fromList (replicate n Nothing)
-
--- FIXME schedule while loop
-initialSchedule :: LvVI -> [LvNodeAddr]
-initialSchedule vi = 
-   (map (LvNodeAddr LvC) (indices $ vControls vi))
-   ++ (map (LvNodeAddr LvN) $ filter (\i -> isBootNode (vNodes vi !! i)) (indices $ vNodes vi))
-   where
-      isBootNode (_, (LvConstant _)) = True
-      isBootNode (_, (LvFeedbackNode _)) = True
-      isBootNode (_, (LvFunction name)) | numberOfInputs name == 0 = True
-      isBootNode _ = False
-
-initialState :: Int -> LvVI -> LvState
-initialState ts vi = 
-   LvState {
-      sTs               = ts + 1,
-      sSched            = initialSchedule vi,
-      sNodeStates       = fromList $ map (makeNodeState)             (vNodes vi),
-      sControlValues    = fromList $ map (makeControlValue . snd)    (vControls vi),
-      sIndicatorValues  = fromList $ map (makeIndicatorValue . snd)  (vIndicators vi)
-   }
-   where
-      makeNodeState :: (String, LvNode) -> LvNodeState
-      makeNodeState (name, node) = LvNodeState name Nothing (emptyInlets $ nInlets node)
-      nInlets (LvSubVI vi)        = length $ vControls vi
-      nInlets (LvFunction name)   = numberOfInputs name
-      nInlets (LvConstant v)      = 0
-      nInlets (LvStructure _ vi)  = length $ vControls vi
-      nInlets (LvFeedbackNode v)  = 1
-      makeControlValue :: LvControl -> Maybe LvValue
-      makeControlValue (LvControl    v)  = Just v
-      makeControlValue (LvSRControl  v)  = Just v
-      makeControlValue _                 = Nothing
-      makeIndicatorValue :: LvIndicator -> Maybe LvValue
-      makeIndicatorValue (LvIndicator v)  = Just v
-      makeIndicatorValue _                = Nothing
-
-feedInletsToVi :: [Maybe LvValue] -> LvState -> LvState
-feedInletsToVi inlets state =
-   state {
-      sTs = (sTs state) + 1,
-      sControlValues = fromList $ map (uncurry orElse)
-                                $ zip inlets (toList (sControlValues state))
-   }      
-
-iIndex = 0 -- counter control for both 'for' and 'while'
-nIndex = 1 -- limit control for 'for'
-testIndex = 0 -- test indicator for 'while'
-
-initCounter :: LvState -> LvState
-initCounter state =
-   state {
-      sTs = (sTs state) + 1,
-      sControlValues = update iIndex (Just $ LvI32 0) (sControlValues state)
-   }
-
-nextStep :: LvVI -> LvState -> Int -> LvState
-nextStep vi state i' =
-   state {
-      sTs = (sTs state) + 1,
-      sSched = initialSchedule vi,
-      sControlValues = cvs''
-   }
-   where
-      cvs' = update iIndex (Just $ LvI32 i') (sControlValues state)
-      cvs'' :: Seq (Maybe LvValue)
-      cvs'' = foldl' shiftRegister cvs' (zip (vIndicators vi) (toList (sIndicatorValues state)))
-         where
-            shiftRegister :: Seq (Maybe LvValue) -> ((String, LvIndicator), Maybe LvValue) -> Seq (Maybe LvValue)
-            shiftRegister cvs ((name, (LvSRIndicator cidx)), ival) = 
-               update cidx (ival `orElse` (index cvs cidx)) cvs
-            shiftRegister cvs _ = cvs
-
-visible :: LvState -> LvVisibleState
-visible state = LvVisibleState (sTs state)
-
-coerceToInt :: LvValue -> LvValue
-coerceToInt v@(LvI32 _) = v
-coerceToInt v@(LvDBL d) = LvI32 (floor d)
-
-runNode :: LvNode -> LvState -> LvState -> [Maybe LvValue] -> Int -> (LvState, [(Int, LvValue)])
-
-runNode (LvSubVI subVi) _ state1 _ _ = (state1, []) -- TODO initialize state, run subvi
-
-runNode (LvFunction name) state0 state1 inlets idx =
-   let
-      nstates = sNodeStates state0 -- REFACTOR was 0
-      nstate@(LvNodeState _ k values) = index nstates idx
-      q = (LvNodeAddr LvN idx)
-
-      ret =
-         case k of
-         Nothing -> applyFunction (visible state1) name (catMaybes $ tsi $ inlets)
-         Just kf -> (kFn kf)      (visible state1)      (catMaybes $ tsi $ inlets)
-   in
-      trc ("firing function " @@ name) $
-      case ret of
-      LvReturn outVals ->
-         (state2, pvs)
-         where
-            state2 = updateNode idx state1 (LvNodeState name Nothing values) []
-            pvs = zip (indices outVals) outVals
-      LvContinue k' ->
-         (updateNode idx state1 (LvNodeState name (Just k') values) [q], [])
-
-runNode (LvConstant value) _ state1 _ _ =
-   trc ("firing constant " @@ value) $
-   (state1, [(0, value)])
-
-runNode (LvStructure LvFor subVi) state0 state1 inlets idx =
-   trc ("firing for") $
-   runLoop subVi shouldStop state0 state1 idx inlets
-   where
-      shouldStop st =
-         trc (i' @@ " >= " @@ n) $ (i' >= n)
-         where
-            (LvI32 i) = getControl st iIndex (LvI32 0)
-            i' = i + 1
-            LvI32 n = coerceToInt $ getControl st nIndex (LvI32 0)
-
-runNode (LvStructure LvWhile subVi) state0 state1 inlets idx =
-   trc ("firing while") $
-   runLoop subVi shouldStop state0 state1 idx inlets
-   where
-      shouldStop st =
-         not test
-         where
-            (LvBool test) = getIndicator st testIndex (error "test boolean in 'while' must be set")
+loop :: LvState -> LvVI -> IO ()
+loop state@(LvState _ q _ _ _) program =
+   do
+      print state
+      if not (null q)
+      then loop (run state program) program 
+      else return ()
 
 \end{code}
 
-In our model, an |LvFeedbackNode| always takes an initialization value. In the
-LabVIEW UI, this value can be left out, in which case a default value of zero
-is implied.
+% FIXME where should this comment go? :
+% TODO this is implying the ordering given in the description of LvVI,
+% but LabVIEW does not specify it
 
 \begin{code}
 
-runNode (LvFeedbackNode initVal) _ state1 inlets _ =
-   (state1, [(0, fromMaybe initVal (inlets !! 0) )])
+run :: LvState -> LvVI -> LvState
 
-getControl :: LvState -> Int -> LvValue -> LvValue
-getControl st idx def = fromMaybe def $ index (sControlValues st) idx
+run state@(LvState _ [] _ _ _) vi = state
 
-getIndicator :: LvState -> Int -> LvValue -> LvValue
-getIndicator st idx def = fromMaybe def $ index (sIndicatorValues st) idx
+run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) mainVi =
+   let
+      state0 = LvState (ts + 1) qs nstates cvs ivs
+   in
+      runThing q state0 mainVi
 
-updateNode :: Int -> LvState -> LvNodeState -> [LvNodeAddr] -> LvState
-updateNode idx st@(LvState ts qs nstates cvs ivs) newNstate newSched = LvState (ts + 1) (qs ++ newSched) (update idx newNstate nstates) cvs ivs
+\end{code}
+
+\section{Objects and structures}
+
+\subsection{Firing data to objects}
+
+\begin{code}
 
 runThing :: LvNodeAddr -> LvState -> LvVI -> LvState
 runThing (LvNodeAddr LvC idx) state0 mainVi =
@@ -427,17 +309,21 @@ runThing q@(LvNodeAddr LvN idx) state0 mainVi =
    in
       foldl' (\s (p, v) -> fire mainVi v (LvPortAddr LvN idx p) s) state2 pvs
 
--- TODO this is implying the ordering given in the description of LvVI,
--- but LabVIEW does not specify it
-run :: LvState -> LvVI -> LvState
+-- Produce a sequence of n empty inlets
+emptyInlets :: Int -> Seq (Maybe LvValue)
+emptyInlets n = fromList (replicate n Nothing)
 
-run state@(LvState _ [] _ _ _) vi = state
+updateNode :: Int -> LvState -> LvNodeState -> [LvNodeAddr] -> LvState
+updateNode idx st newNstate newSched =
+   st {
+      sTs = (sTs st) + 1,
+      sSched = (sSched st) ++ newSched,
+      sNodeStates = update idx newNstate (sNodeStates st)
+   }
 
-run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) mainVi =
-   let
-      state0 = LvState (ts + 1) qs nstates cvs ivs
-   in
-      runThing q state0 mainVi
+\end{code}
+
+\begin{code}
 
 fire :: LvVI -> LvValue -> LvPortAddr -> LvState -> LvState
 fire vi value addr state =
@@ -490,16 +376,85 @@ shouldSchedule (name, node) inlets =
       otherwise ->
          elemIndexL Nothing inlets == Nothing -- all inlets have values
 
-loop :: LvState -> LvVI -> IO ()
-loop state@(LvState _ q _ _ _) program =
-   do
-      print state
-      if not (null q)
-      then loop (run state program) program 
-      else return ()
+\end{code}
 
-runLoop :: LvVI -> (LvState -> Bool) -> LvState -> LvState -> Int -> [Maybe LvValue] -> (LvState, [(Int, LvValue)])
-runLoop loopVi shouldStop state0 state1 idx inlets =
+\subsection{Nodes}
+
+\begin{code}
+
+runNode :: LvNode -> LvState -> LvState -> [Maybe LvValue] -> Int -> (LvState, [(Int, LvValue)])
+
+runNode (LvSubVI subVi) _ state1 _ _ = (state1, []) -- TODO initialize state, run subvi
+
+runNode (LvFunction name) state0 state1 inlets idx =
+   let
+      nstates = sNodeStates state0 -- REFACTOR was 0
+      nstate@(LvNodeState _ k values) = index nstates idx
+      q = (LvNodeAddr LvN idx)
+
+      visible :: LvState -> LvVisibleState
+      visible state = LvVisibleState (sTs state)
+
+      ret =
+         case k of
+         Nothing -> applyFunction (visible state1) name (catMaybes $ tsi $ inlets)
+         Just kf -> (kFn kf)      (visible state1)      (catMaybes $ tsi $ inlets)
+   in
+      trc ("firing function " @@ name) $
+      case ret of
+      LvReturn outVals ->
+         (state2, pvs)
+         where
+            state2 = updateNode idx state1 (LvNodeState name Nothing values) []
+            pvs = zip (indices outVals) outVals
+      LvContinue k' ->
+         (updateNode idx state1 (LvNodeState name (Just k') values) [q], [])
+
+runNode (LvConstant value) _ state1 _ _ =
+   trc ("firing constant " @@ value) $
+   (state1, [(0, value)])
+
+\end{code}
+
+In our model, an |LvFeedbackNode| always takes an initialization value. In the
+LabVIEW UI, this value can be left out, in which case a default value of zero
+is implied.
+
+\begin{code}
+
+runNode (LvFeedbackNode initVal) _ state1 inlets _ =
+   (state1, [(0, fromMaybe initVal (inlets !! 0) )])
+
+\end{code}
+
+\begin{code}
+
+runNode (LvStructure LvFor subVi) state0 state1 inlets idx =
+   trc ("firing for") $
+   loopStructure subVi shouldStop state0 state1 idx inlets
+   where
+      shouldStop st =
+         trc (i' @@ " >= " @@ n) $ (i' >= n)
+         where
+            (LvI32 i) = getControl st iIndex (LvI32 0)
+            i' = i + 1
+            LvI32 n = coerceToInt $ getControl st nIndex (LvI32 0)
+
+runNode (LvStructure LvWhile subVi) state0 state1 inlets idx =
+   trc ("firing while") $
+   loopStructure subVi shouldStop state0 state1 idx inlets
+   where
+      shouldStop st =
+         not test
+         where
+            (LvBool test) = getIndicator st testIndex (error "test boolean in 'while' must be set")
+
+\end{code}
+
+\begin{code}
+
+loopStructure :: LvVI -> (LvState -> Bool) -> LvState -> LvState -> Int -> [Maybe LvValue] -> (LvState, [(Int, LvValue)])
+loopStructure loopVi shouldStop state0 state1 idx inlets =
    let
       nstates = sNodeStates state0 -- REFACTOR was 0
       nstate@(LvNodeState name k values) = index nstates idx
@@ -533,6 +488,88 @@ runLoop loopVi shouldStop state0 state1 idx inlets =
       if isJust nextk 
       then (state2, [])
       else (state2, pvs)
+
+initialState :: Int -> LvVI -> LvState
+initialState ts vi = 
+   LvState {
+      sTs               = ts + 1,
+      sSched            = initialSchedule vi,
+      sNodeStates       = fromList $ map (makeNodeState)             (vNodes vi),
+      sControlValues    = fromList $ map (makeControlValue . snd)    (vControls vi),
+      sIndicatorValues  = fromList $ map (makeIndicatorValue . snd)  (vIndicators vi)
+   }
+   where
+      makeNodeState :: (String, LvNode) -> LvNodeState
+      makeNodeState (name, node) = LvNodeState name Nothing (emptyInlets $ nInlets node)
+      nInlets (LvSubVI vi)        = length $ vControls vi
+      nInlets (LvFunction name)   = numberOfInputs name
+      nInlets (LvConstant v)      = 0
+      nInlets (LvStructure _ vi)  = length $ vControls vi
+      nInlets (LvFeedbackNode v)  = 1
+      makeControlValue :: LvControl -> Maybe LvValue
+      makeControlValue (LvControl    v)  = Just v
+      makeControlValue (LvSRControl  v)  = Just v
+      makeControlValue _                 = Nothing
+      makeIndicatorValue :: LvIndicator -> Maybe LvValue
+      makeIndicatorValue (LvIndicator v)  = Just v
+      makeIndicatorValue _                = Nothing
+
+-- FIXME schedule while loop
+initialSchedule :: LvVI -> [LvNodeAddr]
+initialSchedule vi = 
+   (map (LvNodeAddr LvC) (indices $ vControls vi))
+   ++ (map (LvNodeAddr LvN) $ filter (\i -> isBootNode (vNodes vi !! i)) (indices $ vNodes vi))
+   where
+      isBootNode (_, (LvConstant _)) = True
+      isBootNode (_, (LvFeedbackNode _)) = True
+      isBootNode (_, (LvFunction name)) | numberOfInputs name == 0 = True
+      isBootNode _ = False
+
+feedInletsToVi :: [Maybe LvValue] -> LvState -> LvState
+feedInletsToVi inlets state =
+   state {
+      sTs = (sTs state) + 1,
+      sControlValues = fromList $ map (uncurry orElse)
+                                $ zip inlets (toList (sControlValues state))
+   }      
+
+iIndex = 0 -- counter control for both 'for' and 'while'
+nIndex = 1 -- limit control for 'for'
+testIndex = 0 -- test indicator for 'while'
+
+initCounter :: LvState -> LvState
+initCounter state =
+   state {
+      sTs = (sTs state) + 1,
+      sControlValues = update iIndex (Just $ LvI32 0) (sControlValues state)
+   }
+
+nextStep :: LvVI -> LvState -> Int -> LvState
+nextStep vi state i' =
+   state {
+      sTs = (sTs state) + 1,
+      sSched = initialSchedule vi,
+      sControlValues = cvs''
+   }
+   where
+      cvs' = update iIndex (Just $ LvI32 i') (sControlValues state)
+      cvs'' :: Seq (Maybe LvValue)
+      cvs'' = foldl' shiftRegister cvs' (zip (vIndicators vi) (toList (sIndicatorValues state)))
+         where
+            shiftRegister :: Seq (Maybe LvValue) -> ((String, LvIndicator), Maybe LvValue) -> Seq (Maybe LvValue)
+            shiftRegister cvs ((name, (LvSRIndicator cidx)), ival) = 
+               update cidx (ival `orElse` (index cvs cidx)) cvs
+            shiftRegister cvs _ = cvs
+
+coerceToInt :: LvValue -> LvValue
+coerceToInt v@(LvI32 _) = v
+coerceToInt v@(LvDBL d) = LvI32 (floor d)
+
+getControl :: LvState -> Int -> LvValue -> LvValue
+getControl st idx def = fromMaybe def $ index (sControlValues st) idx
+
+getIndicator :: LvState -> Int -> LvValue -> LvValue
+getIndicator st idx def = fromMaybe def $ index (sIndicatorValues st) idx
 
 \end{code}
 
