@@ -365,22 +365,22 @@ runNode (LvConstant value) _ state1 _ _ =
 runNode (LvStructure LvFor subVi) state0 state1 inlets idx =
    trc ("firing for") $
    runLoop subVi shouldStop state0 state1 idx inlets
-      where
-         shouldStop st =
-            trc (i' @@ " >= " @@ n) $ (i' >= n)
-            where
-               (LvI32 i) = getControl st iIndex (LvI32 0)
-               i' = i + 1
-               LvI32 n = coerceToInt $ getControl st nIndex (LvI32 0)
+   where
+      shouldStop st =
+         trc (i' @@ " >= " @@ n) $ (i' >= n)
+         where
+            (LvI32 i) = getControl st iIndex (LvI32 0)
+            i' = i + 1
+            LvI32 n = coerceToInt $ getControl st nIndex (LvI32 0)
 
 runNode (LvStructure LvWhile subVi) state0 state1 inlets idx =
    trc ("firing while") $
    runLoop subVi shouldStop state0 state1 idx inlets
-      where
-         shouldStop st =
-            not test
-            where
-               (LvBool test) = getIndicator st testIndex (error "test boolean in 'while' must be set")
+   where
+      shouldStop st =
+         not test
+         where
+            (LvBool test) = getIndicator st testIndex (error "test boolean in 'while' must be set")
 
 \end{code}
 
