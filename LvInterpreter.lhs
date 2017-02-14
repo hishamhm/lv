@@ -18,10 +18,9 @@
 module LvInterpreter where
 
 import Data.Sequence (Seq, fromList, index, update, mapWithIndex, fromList, elemIndexL)
-import qualified Data.Sequence (length)
+import qualified Data.Sequence as Seq (length)
 import Data.List
 import Data.Maybe
-import Data.Sequence ()
 import Data.Foldable (toList)
 
 \end{code}
@@ -434,7 +433,7 @@ runThing q@(LvNodeAddr LvN idx) state0 mainVi =
 
       state1 =
          if isNothing k
-         then updateNode idx state0 (LvNodeState name k (emptyInlets (Data.Sequence.length values))) []
+         then updateNode idx state0 (LvNodeState name k (emptyInlets (Seq.length values))) []
          else state0
       inlets =
          case k of
