@@ -394,12 +394,16 @@ runNode (LvFeedbackNode initVal) state1 inlets mainVi idx _ state0 =
    in
       fire mainVi (fromMaybe initVal inputVal) (LvPortAddr LvN idx 0) state1
 
-getControl   st idx def = fromMaybe def $ index (sControlValues    st) idx
-getIndicator st idx def = fromMaybe def $ index (sIndicatorValues  st) idx
+getControl :: LvState -> Int -> LvValue -> LvValue
+getControl st idx def = fromMaybe def $ index (sControlValues st) idx
+
+getIndicator :: LvState -> Int -> LvValue -> LvValue
+getIndicator st idx def = fromMaybe def $ index (sIndicatorValues st) idx
 
 updateNode :: Int -> LvState -> LvNodeState -> [LvNodeAddr] -> LvState
 updateNode idx st@(LvState ts qs nstates cvs ivs) newNstate newSched = LvState (ts + 1) (qs ++ newSched) (update idx newNstate nstates) cvs ivs
 
+runThing :: LvNodeAddr -> LvState -> LvVI -> LvState
 runThing (LvNodeAddr LvC idx) state0 mainVi =
    fire mainVi (fromMaybe (trc ("maybe???" @@@ cvs @@@ idx) $ undefined) $ index cvs idx) (LvPortAddr LvC idx 0) state0
    where
@@ -468,7 +472,7 @@ propagate value vi dst@(LvPortAddr dtype dnode dport) state =
          let
             entry = LvNodeAddr dtype dnode
          in
-            if (shouldSchedule (vNodes vi !! dnode) inlets' && not (entry `elem` sched))
+            if shouldSchedule (vNodes vi !! dnode) inlets' && not (entry `elem` sched)
             then sched ++ [entry]
             else sched
 
