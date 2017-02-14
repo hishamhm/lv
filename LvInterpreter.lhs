@@ -412,6 +412,14 @@ runNode (LvStructure typ subVi) state1 inlets mainVi idx name state0 =
                where
                   (LvBool test) = getIndicator st testIndex (error "test boolean in 'while' must be set")
 
+\end{code}
+
+In our model, an |LvFeedbackNode| always takes an initialization value. In the
+LabVIEW UI, this value can be left out, in which case a default value of zero
+is implied.
+
+\begin{code}
+
 runNode (LvFeedbackNode initVal) state1 inlets mainVi idx _ state0 =
    let
       inputVal = inlets !! 0
