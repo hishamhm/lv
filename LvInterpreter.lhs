@@ -265,50 +265,60 @@ initialSchedule vi =
 
 initialState :: Int -> LvVI -> LvState
 initialState ts vi = 
-   LvState (ts + 1) (initialSchedule vi) nodeStates controlValues indicatorValues
-      where
-         nodeStates = fromList $ map expandNode (vNodes vi)
-            where
-               expandNode :: (String, LvNode) -> LvNodeState
-               expandNode (name, node) = 
-                  case node of
-                     LvSubVI vi       -> LvNodeState name Nothing (emptyInlets (length $ vControls vi))
-                     LvFunction name  -> LvNodeState name Nothing (emptyInlets (numberOfInputs name))
-                     LvConstant v     -> LvNodeState name Nothing (emptyInlets 0)
-                     LvStructure _ vi -> LvNodeState name Nothing (emptyInlets (length $ vControls vi))
-                     LvFeedbackNode v -> LvNodeState name Nothing (emptyInlets 1)
-         controlValues = fromList $ map makeControlValue (vControls vi)
-            where
-               makeControlValue (_, LvControl v) = Just v
-               makeControlValue (_, LvSRControl v) = Just v
-               makeControlValue _ = Nothing
-         indicatorValues = fromList $ map makeIndicatorValue (vIndicators vi)
-            where
-               makeIndicatorValue (_, LvIndicator v) = Just v
-               makeIndicatorValue _ = Nothing
+   LvState {
+      sTs               = ts + 1,
+      sSched            = initialSchedule vi,
+      sNodeStates       = fromList $ map (makeNodeState)             (vNodes vi),
+      sControlValues    = fromList $ map (makeControlValue . snd)    (vControls vi),
+      sIndicatorValues  = fromList $ map (makeIndicatorValue . snd)  (vIndicators vi)
+   }
+   where
+      makeNodeState :: (String, LvNode) -> LvNodeState
+      makeNodeState (name, node) = LvNodeState name Nothing (emptyInlets $ nInlets node)
+      nInlets (LvSubVI vi)        = length $ vControls vi
+      nInlets (LvFunction name)   = numberOfInputs name
+      nInlets (LvConstant v)      = 0
+      nInlets (LvStructure _ vi)  = length $ vControls vi
+      nInlets (LvFeedbackNode v)  = 1
+      makeControlValue :: LvControl -> Maybe LvValue
+      makeControlValue (LvControl    v)  = Just v
+      makeControlValue (LvSRControl  v)  = Just v
+      makeControlValue _                 = Nothing
+      makeIndicatorValue :: LvIndicator -> Maybe LvValue
+      makeIndicatorValue (LvIndicator v)  = Just v
+      makeIndicatorValue _                = Nothing
 
 feedInletsToVi :: [Maybe LvValue] -> LvState -> LvState
 
-feedInletsToVi inlets state@(LvState ts sched nstates cvs ivs) =
-   let
-      combine inlets cvs = fromList $ map (\(a,b) -> if isNothing a then b else a) $ zip inlets $ toList cvs
-   in
-      LvState (ts + 1) sched nstates (combine inlets cvs) ivs
+feedInletsToVi inlets state =
+   state {
+      sTs = (sTs state) + 1,
+      sControlValues = fromList $ map (\(a,b) -> if isNothing a then b else a)
+                                $ zip inlets (toList (sControlValues state))
+   }      
 
 iIndex = 0 -- counter control for both 'for' and 'while'
 nIndex = 1 -- limit control for 'for'
 testIndex = 0 -- test indicator for 'while'
 
 initCounter :: LvState -> LvState
-initCounter state@(LvState ts sched nstates cvs ivs) =
-   LvState (ts + 1) sched nstates (update iIndex (Just $ LvI32 0) cvs) ivs
+initCounter state =
+   state {
+      sTs = (sTs state) + 1,
+      sControlValues = update iIndex (Just $ LvI32 0) (sControlValues state)
+   }
 
 nextStep :: LvVI -> LvState -> Int -> LvState
-nextStep vi state@(LvState ts sched nstates cvs ivs) i' =
-   let
-      cvs' = update iIndex (Just $ LvI32 i') cvs
+nextStep vi state i' =
+   state {
+      sTs = (sTs state) + 1,
+      sSched = initialSchedule vi,
+      sControlValues = cvs''
+   }
+   where
+      cvs' = update iIndex (Just $ LvI32 i') (sControlValues state)
       cvs'' :: Seq (Maybe LvValue)
-      cvs'' = foldl' shiftRegister cvs' (zip (vIndicators vi) (toList ivs))
+      cvs'' = foldl' shiftRegister cvs' (zip (vIndicators vi) (toList (sIndicatorValues state)))
          where
             shiftRegister :: Seq (Maybe LvValue) -> ((String, LvIndicator), Maybe LvValue) -> Seq (Maybe LvValue)
             shiftRegister cvs ((name, (LvSRIndicator cidx)), ival) = 
@@ -316,12 +326,9 @@ nextStep vi state@(LvState ts sched nstates cvs ivs) i' =
                update cidx (thisOrThat ival (index cvs cidx)) cvs
                   where thisOrThat a b = if isNothing a then b else a
             shiftRegister cvs _ = cvs
-   in
-      LvState (ts + 1) (initialSchedule vi) nstates cvs'' ivs
 
 visible :: LvState -> LvVisibleState
-visible state@(LvState ts sched nstate cvs ivs) =
-   LvVisibleState ts
+visible state = LvVisibleState (sTs state)
 
 coerceToInt :: LvValue -> LvValue
 coerceToInt v@(LvI32 _) = v
