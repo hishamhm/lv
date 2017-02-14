@@ -333,9 +333,11 @@ coerceToInt :: LvValue -> LvValue
 coerceToInt v@(LvI32 _) = v
 coerceToInt v@(LvDBL d) = LvI32 (floor d)
 
-runNode (LvSubVI subVi) state1 _ _ _ state0 = state1 -- TODO initialize state, run subvi
+runNode :: LvNode -> LvState -> LvState -> [Maybe LvValue] -> LvVI -> Int -> LvState
 
-runNode (LvFunction name) state1 inlets mainVi idx state0 =
+runNode (LvSubVI subVi) state0 state1 _ _ _ = state1 -- TODO initialize state, run subvi
+
+runNode (LvFunction name) state0 state1 inlets mainVi idx =
    let
       nstates = sNodeStates state0 -- REFACTOR was 0
       nstate@(LvNodeState name k values) = index nstates idx
@@ -357,11 +359,11 @@ runNode (LvFunction name) state1 inlets mainVi idx state0 =
       LvContinue k' ->
          updateNode idx state1 (LvNodeState name (Just k') values) [q]
 
-runNode (LvConstant value) state1 _ mainVi idx state0 =
+runNode (LvConstant value) state0 state1 _ mainVi idx =
    trc ("firing constant " @@ value) $
    fire mainVi value (LvPortAddr LvN idx 0) state1
 
-runNode (LvStructure typ subVi) state1 inlets mainVi idx state0 =
+runNode (LvStructure typ subVi) state0 state1 inlets mainVi idx =
    trc ("firing structure " @@ typ) $
    case typ of
    LvFor -> runLoop subVi shouldStop state0 state1 idx inlets mainVi
@@ -388,7 +390,7 @@ is implied.
 
 \begin{code}
 
-runNode (LvFeedbackNode initVal) state1 inlets mainVi idx state0 =
+runNode (LvFeedbackNode initVal) state0 state1 inlets mainVi idx =
    let
       inputVal = inlets !! 0
    in
@@ -425,7 +427,7 @@ runThing q@(LvNodeAddr LvN idx) state0 mainVi =
          Just (LvKState st) -> trc "reading inlets from KState!?" $ undefined
       (name, node) = vNodes mainVi !! idx
    in
-      runNode node state1 inlets mainVi idx state0
+      runNode node state0 state1 inlets mainVi idx
 
 -- TODO this is implying the ordering given in the description of LvVI,
 -- but LabVIEW does not specify it
