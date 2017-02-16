@@ -1,8 +1,13 @@
 \documentclass[a4paper]{article}
 %\setlength{\parskip}{\baselineskip}
 \usepackage[margin=3cm]{geometry}
+
+%BEGIN LYX PREAMBLE
+
 %include polycode.fmt
 %include Lv_format.lhs
+
+%END LYX PREAMBLE
 
 \begin{document}
 
@@ -10,6 +15,8 @@
 \author{Hisham Muhammad}
 
 \maketitle{}
+
+%BEGIN LYX TEXT
 
 \section{Introduction}
 
@@ -622,5 +629,7 @@ numOp opD opI args = binOp opD LvDBL opI LvI32 args
 boolOp opD opI args = binOp opD LvBool opI LvBool args
 
 \end{code}
+
+%END LYX TEXT
 
 \end{document}
