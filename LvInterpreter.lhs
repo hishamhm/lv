@@ -189,7 +189,8 @@ data LvReturn  =  LvReturn [LvValue]
 \begin{code}
 
 instance Show LvPortAddr where
-   show (LvPortAddr typ nidx pidx) = "{" ++ show typ ++ " " ++ show nidx ++ ", " ++ show pidx ++ "}"
+   show (LvPortAddr typ nidx pidx) =
+      "{" ++ show typ ++ " " ++ show nidx ++ ", " ++ show pidx ++ "}"
 
 instance Show LvNodeAddr where
    show (LvNodeAddr typ nidx) = "{" ++ show typ ++ " " ++ show nidx ++ "}"
@@ -213,7 +214,8 @@ zwire a b = LvStringWire (a, 0) (b, 0)
 
 nwire a i b j = LvStringWire (a, i) (b, j)
 
-makeVI :: [(String, LvControl)] -> [(String, LvIndicator)] -> [(String, LvNode)] -> [LvStringWire] -> LvVI
+makeVI ::  [(String, LvControl)] -> [(String, LvIndicator)]
+           -> [(String, LvNode)] -> [LvStringWire] -> LvVI
 makeVI controls indicators nodes stringWires =
    LvVI {
       vControls = controls,
@@ -230,7 +232,8 @@ makeVI controls indicators nodes stringWires =
          in
             LvWire (LvPortAddr srcType srcNode srcPort') (LvPortAddr dstType dstNode dstPort')
 
-      findNode :: [(String, a)] -> LvNodeType -> (LvVI -> [(String, b)]) -> String -> Int -> (LvNodeType, Int, Int)
+      findNode ::  [(String, a)] -> LvNodeType -> (LvVI -> [(String, b)])
+                   -> String -> Int -> (LvNodeType, Int, Int)
       findNode entries etype nodeEntries name port =
          let
             findPort es = elemIndex name $ map fst es
