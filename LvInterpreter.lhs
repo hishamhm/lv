@@ -38,7 +38,6 @@ import Data.Generics.Aliases (orElse)
 \begin{code}
 
 import Debug.Trace
-import ShowConcat ((@@), (@@@))
 
 -- Debugging on:
 tsi :: Show a => a -> a
@@ -247,7 +246,8 @@ makeVI controls indicators nodes stringWires =
          in
             case findPort entries of
                Just i -> (etype, i, port)
-               Nothing -> case find isJust $ toList $ mapWithIndex checkNode (fromList nodes) of
+               Nothing -> case find isJust
+                               $ toList $ mapWithIndex checkNode (fromList nodes) of
                   Just (Just (node, nodePort)) -> (LvN, node, nodePort)
                   Nothing -> error ("No such wire " ++ name ++
                                     " (attempted to connect port " ++ show port ++ ")")
@@ -262,9 +262,9 @@ loop :: LvState -> LvVI -> IO ()
 loop state@(LvState _ q _ _ _) program =
    do
       print state
-      if not (null q)
-      then loop (run state program) program 
-      else return ()
+      case q of
+       []  -> return ()
+       _   -> loop (run state program) program 
 
 \end{code}
 
@@ -302,10 +302,10 @@ runThing q@(LvNodeAddr LvN idx) state0 mainVi =
    let
       nstates = sNodeStates state0
       nstate@(LvNodeState _ k values) = index nstates idx
-
+      clearState = LvNodeState name k (emptyInlets (Seq.length values))
       state1 =
          if isNothing k
-         then updateNode idx state0 (LvNodeState name k (emptyInlets (Seq.length values))) []
+         then updateNode idx state0 clearState []
          else state0
       inlets =
          case k of
@@ -335,7 +335,7 @@ updateNode idx st newNstate newSched =
 
 fire :: LvVI -> LvValue -> LvPortAddr -> LvState -> LvState
 fire vi value addr state =
-   trc ("firing" @@@ addr @@@ "with value" @@@ value @@@ "\tvi <" @@ (take 30 $ show vi) @@ ">\tstate" @@@ state) $!
+   trc ("firing " ++ show addr ++ " with value " ++ show value ++ "\tvi <" ++ (take 30 $ show vi) ++ ">\tstate " ++ show state) $!
    foldl' checkWire state (vWires vi)
       where
       checkWire state (LvWire src dst) =
@@ -390,7 +390,8 @@ shouldSchedule (name, node) inlets =
 
 \begin{code}
 
-runNode :: LvNode -> LvState -> LvState -> [Maybe LvValue] -> Int -> (LvState, [(Int, LvValue)])
+runNode ::  LvNode -> LvState -> LvState -> [Maybe LvValue] -> Int
+            -> (LvState, [(Int, LvValue)])
 
 runNode (LvSubVI subVi) _ state1 _ _ = (state1, []) -- TODO initialize state, run subvi
 
@@ -408,7 +409,7 @@ runNode (LvFunction name) state0 state1 inlets idx =
          Nothing -> applyFunction (visible state1) name (catMaybes $ tsi $ inlets)
          Just kf -> (kFn kf)      (visible state1)      (catMaybes $ tsi $ inlets)
    in
-      trc ("firing function " @@ name) $
+      trc ("firing function " ++ name) $
       case ret of
       LvReturn outVals ->
          (state2, pvs)
@@ -419,7 +420,7 @@ runNode (LvFunction name) state0 state1 inlets idx =
          (updateNode idx state1 (LvNodeState name (Just k') values) [q], [])
 
 runNode (LvConstant value) _ state1 _ _ =
-   trc ("firing constant " @@ value) $
+   trc ("firing constant " ++ show value) $
    (state1, [(0, value)])
 
 \end{code}
@@ -442,7 +443,7 @@ runNode (LvStructure LvFor subVi) state0 state1 inlets idx =
    loopStructure subVi shouldStop state0 state1 idx inlets
    where
       shouldStop st =
-         trc (i' @@ " >= " @@ n) $ (i' >= n)
+         trc (show i' ++ " >= " ++ show n) $ (i' >= n)
          where
             (LvI32 i) = getControl st iIndex (LvI32 0)
             i' = i + 1
@@ -455,13 +456,15 @@ runNode (LvStructure LvWhile subVi) state0 state1 inlets idx =
       shouldStop st =
          not test
          where
-            (LvBool test) = getIndicator st testIndex (error "test boolean in 'while' must be set")
+            (LvBool test) = getIndicator st testIndex
+                            (error "test boolean in 'while' must be set")
 
 \end{code}
 
 \begin{code}
 
-loopStructure :: LvVI -> (LvState -> Bool) -> LvState -> LvState -> Int -> [Maybe LvValue] -> (LvState, [(Int, LvValue)])
+loopStructure ::  LvVI -> (LvState -> Bool) -> LvState -> LvState -> Int
+                  -> [Maybe LvValue] -> (LvState, [(Int, LvValue)])
 loopStructure loopVi shouldStop state0 state1 idx inlets =
    let
       nstates = sNodeStates state0 -- REFACTOR was 0
@@ -470,7 +473,9 @@ loopStructure loopVi shouldStop state0 state1 idx inlets =
 
       statek = 
          case k of
-         Nothing -> initCounter $ feedInletsToVi inlets $ initialState ((sTs state1) + 1) loopVi
+         Nothing -> initCounter
+                    $ feedInletsToVi inlets
+                    $ initialState ((sTs state1) + 1) loopVi
          Just (LvKState st) -> st
       statek'@(LvState _ qk _ _ _) = run statek loopVi
       nextk =
@@ -479,8 +484,9 @@ loopStructure loopVi shouldStop state0 state1 idx inlets =
          else
             if shouldStop statek'
             then Nothing
-            else trc ("let's go " @@ (i + 1)) $
-               trc ("before: " @@ statek') $ Just (LvKState (nextStep loopVi statek' (i + 1)))
+            else trc ("let's go " ++ show (i + 1)) $
+               trc ("before: " ++ show statek') $
+               Just (LvKState (nextStep loopVi statek' (i + 1)))
                where (LvI32 i) = getControl statek' iIndex (LvI32 999)
       nstate' = (LvNodeState name nextk values)
       thisq = if isJust nextk then [q] else []
@@ -508,7 +514,8 @@ initialState ts vi =
    }
    where
       makeNodeState :: (String, LvNode) -> LvNodeState
-      makeNodeState (name, node) = LvNodeState name Nothing (emptyInlets $ nInlets node)
+      makeNodeState (name, node) = LvNodeState  name Nothing
+                                                (emptyInlets $ nInlets node)
       nInlets (LvSubVI vi)        = length $ vControls vi
       nInlets (LvFunction name)   = numberOfInputs name
       nInlets (LvConstant v)      = 0
@@ -526,7 +533,8 @@ initialState ts vi =
 initialSchedule :: LvVI -> [LvNodeAddr]
 initialSchedule vi = 
    (map (LvNodeAddr LvC) (indices $ vControls vi))
-   ++ (map (LvNodeAddr LvN) $ filter (\i -> isBootNode (vNodes vi !! i)) (indices $ vNodes vi))
+   ++ (map (LvNodeAddr LvN) $ filter  (\i -> isBootNode (vNodes vi !! i))
+                                      (indices $ vNodes vi))
    where
       isBootNode (_, (LvConstant _)) = True
       isBootNode (_, (LvFeedbackNode _)) = True
@@ -562,12 +570,13 @@ nextStep vi state i' =
    where
       cvs' = update iIndex (Just $ LvI32 i') (sControlValues state)
       cvs'' :: Seq (Maybe LvValue)
-      cvs'' = foldl' shiftRegister cvs' (zip (vIndicators vi) (toList (sIndicatorValues state)))
-         where
-            shiftRegister :: Seq (Maybe LvValue) -> ((String, LvIndicator), Maybe LvValue) -> Seq (Maybe LvValue)
-            shiftRegister cvs ((name, (LvSRIndicator cidx)), ival) = 
-               update cidx (ival `orElse` (index cvs cidx)) cvs
-            shiftRegister cvs _ = cvs
+      cvs'' = foldl' shiftRegister cvs'
+              $ zip (vIndicators vi) (toList (sIndicatorValues state))
+      shiftRegister ::  Seq (Maybe LvValue) -> ((String, LvIndicator), Maybe LvValue)
+                        -> Seq (Maybe LvValue)
+      shiftRegister cvs ((name, (LvSRIndicator cidx)), ival) = 
+         update cidx (ival `orElse` (index cvs cidx)) cvs
+      shiftRegister cvs _ = cvs
 
 coerceToInt :: LvValue -> LvValue
 coerceToInt v@(LvI32 _) = v
@@ -586,24 +595,25 @@ getIndicator st idx def = fromMaybe def $ index (sIndicatorValues st) idx
 \begin{code}
 
 numberOfInputs :: String -> Int
-numberOfInputs "*" = 2
-numberOfInputs "WaitUntilNextMs" = 1
-numberOfInputs "RandomNumber" = 0
-numberOfInputs "Bundle" = 2
-numberOfInputs "+" = 2
-numberOfInputs "InsertIntoArray" = 2
-numberOfInputs "ArrayMax&Min" = 1
-numberOfInputs "<" = 2
-numberOfInputs fn = error ("unknown function " ++ fn)
+numberOfInputs f
+   | f == "RandomNumber"     = 0
+   | f == "WaitUntilNextMs"  = 1
+   | f == "ArrayMax&Min"     = 2
+   | f == "Bundle"           = 2
+   | f == "InsertIntoArray"  = 2
+   | isOp f                  = 2
+   | otherwise               = error ("unknown function " ++ f)
+
+isOp f = f `elem` ["+", "-", "*", "/", ">", "<"]
 
 applyFunction :: LvVisibleState -> String -> [LvValue] -> LvReturn
 
-applyFunction vst "+" args = numOp (+) (+) args
-applyFunction vst "-" args = numOp (-) (-) args
-applyFunction vst "*" args = numOp (*) (*) args
-applyFunction vst "/" args = numOp (/) div args
-applyFunction vst "<" args = boolOp (<) (<) args
-applyFunction vst ">" args = boolOp (>) (>) args
+applyFunction vst "+" args = numOp   (+) (+)  args
+applyFunction vst "-" args = numOp   (-) (-)  args
+applyFunction vst "*" args = numOp   (*) (*)  args
+applyFunction vst "/" args = numOp   (/) div  args
+applyFunction vst "<" args = boolOp  (<) (<)  args
+applyFunction vst ">" args = boolOp  (>) (>)  args
 
 applyFunction vst "RandomNumber" [] = LvReturn [LvDBL 0.5] -- not very random :)
 
@@ -615,18 +625,20 @@ applyFunction vst@(LvVisibleState ts) "WaitUntilNextMs" [LvI32 ms] =
          | ts >= nextMs = LvReturn []
          | otherwise    = LvContinue $ LvKFunction waitUntil arg
 
-applyFunction vst "WaitUntilNextMs" [LvDBL msd] = applyFunction vst "WaitUntilNextMs" [LvI32 (floor msd)]
+applyFunction vst "WaitUntilNextMs" [LvDBL msd] =
+   applyFunction vst "WaitUntilNextMs" [LvI32 (floor msd)]
 
-applyFunction vst fn args = error ("No rule to apply " ++ fn ++ " " ++ show args)
+applyFunction vst fn args =
+   error ("No rule to apply " ++ fn ++ " " ++ show args)
 
-
-binOp opD typD opI typI [LvDBL a, LvDBL b] = LvReturn [typD (opD a b)]
-binOp opD typD opI typI [LvI32 a, LvDBL b] = LvReturn [typD (opD (fromIntegral a) b)]
-binOp opD typD opI typI [LvDBL a, LvI32 b] = LvReturn [typD (opD a (fromIntegral b))]
-binOp opD typD opI typI [LvI32 a, LvI32 b] = LvReturn [typI (opI a b)]
-binOp opD typD opI typI _                  = undefined
+binOp opD typD _ _  [LvDBL a,  LvDBL b]  = LvReturn [typD (opD a b)]
+binOp opD typD _ _  [LvI32 a,  LvDBL b]  = LvReturn [typD (opD (fromIntegral a) b)]
+binOp opD typD _ _  [LvDBL a,  LvI32 b]  = LvReturn [typD (opD a (fromIntegral b))]
+binOp _ _ opI typI  [LvI32 a,  LvI32 b]  = LvReturn [typI (opI a b)]
+binOp _ _ opI typI  _                    = undefined
 
 numOp opD opI args = binOp opD LvDBL opI LvI32 args
+
 boolOp opD opI args = binOp opD LvBool opI LvBool args
 
 \end{code}

@@ -10,3 +10,4 @@
 %format dstNode = "node_{dst}"
 %format srcPort'
 %format dstPort'
+%format (LvPortAddr t n p) = "\llparenthesis " t ", " n ", " p "\rrparenthesis "
