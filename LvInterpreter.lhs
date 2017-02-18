@@ -74,8 +74,6 @@ data LvIndicator  =  LvIndicator LvValue
 
 \end{code}
 
-\section{Representation of programs}
-
 \begin{code}
 data LvTunnelMode  =  LvAutoIndexing -- TODO implement
                    |  LvLastValue
