@@ -500,6 +500,17 @@ loopStructure loopVi shouldStop state0 state1 idx inlets =
       then (state2, [])
       else (state2, pvs)
 
+\end{code}
+
+A node is fired when all its connected inputs have incoming data. We
+specifically check for connected inputs because some LabVIEW nodes have
+optional inputs. We assume here for simplicity that the type-checking step
+prior to execution verified that the correct set of mandatory inputs has been
+connected. Here, we derive the number of connections of a node from the
+list of wires.
+
+\begin{code}
+
 numberOfInputs :: Int -> LvVI -> Int
 numberOfInputs idx vi =
    1 + foldl' maxInput (-1) (vWires vi)
