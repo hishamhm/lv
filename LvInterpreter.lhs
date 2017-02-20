@@ -500,24 +500,32 @@ loopStructure loopVi shouldStop state0 state1 idx inlets =
       then (state2, [])
       else (state2, pvs)
 
+numberOfInputs :: Int -> LvVI -> Int
+numberOfInputs idx vi =
+   1 + foldl' maxInput (-1) (vWires vi)
+   where
+      maxInput :: Int -> LvWire -> Int
+      maxInput mx w@(LvWire _ (LvPortAddr LvN i n)) | i == idx = max mx n
+      maxInput mx _ = mx
+
 initialState :: Int -> LvVI -> LvState
 initialState ts vi = 
    LvState {
       sTs               = ts + 1,
       sSched            = initialSchedule vi,
-      sNodeStates       = fromList $ map (makeNodeState)             (vNodes vi),
+      sNodeStates       = fromList $ mapIdx (makeNodeState)          (vNodes vi),
       sControlValues    = fromList $ map (makeControlValue . snd)    (vControls vi),
       sIndicatorValues  = fromList $ map (makeIndicatorValue . snd)  (vIndicators vi)
    }
    where
-      makeNodeState :: (String, LvNode) -> LvNodeState
-      makeNodeState (name, node) = LvNodeState  name Nothing
-                                                (emptyInlets $ nInlets node)
-      nInlets (LvSubVI vi)        = length $ vControls vi
-      nInlets (LvFunction name)   = numberOfInputs name
-      nInlets (LvConstant v)      = 0
-      nInlets (LvStructure _ vi)  = length $ vControls vi
-      nInlets (LvFeedbackNode v)  = 1
+      makeNodeState :: (Int, (String, LvNode)) -> LvNodeState
+      makeNodeState (i, (name, node)) = LvNodeState  name Nothing
+                                                     (emptyInlets $ nInlets i node)
+      nInlets _ (LvSubVI vi)        = length $ vControls vi
+      nInlets i (LvFunction _)      = numberOfInputs i vi
+      nInlets _ (LvConstant v)      = 0
+      nInlets _ (LvStructure _ vi)  = length $ vControls vi
+      nInlets _ (LvFeedbackNode v)  = 1
       makeControlValue :: LvControl -> Maybe LvValue
       makeControlValue (LvControl    v)  = Just v
       makeControlValue (LvSRControl  v)  = Just v
@@ -525,18 +533,21 @@ initialState ts vi =
       makeIndicatorValue :: LvIndicator -> Maybe LvValue
       makeIndicatorValue (LvIndicator v)  = Just v
       makeIndicatorValue _                = Nothing
+      
+      mapIdx :: ((Int, a) -> b) -> [a] -> [b]
+      mapIdx fn l = map fn $ zip (indices l) l
 
 -- FIXME schedule while loop
 initialSchedule :: LvVI -> [LvNodeAddr]
 initialSchedule vi = 
    (map (LvNodeAddr LvC) (indices $ vControls vi))
-   ++ (map (LvNodeAddr LvN) $ filter  (\i -> isBootNode (vNodes vi !! i))
+   ++ (map (LvNodeAddr LvN) $ filter  (\i -> isBootNode i (vNodes vi !! i))
                                       (indices $ vNodes vi))
    where
-      isBootNode (_, (LvConstant _)) = True
-      isBootNode (_, (LvFeedbackNode _)) = True
-      isBootNode (_, (LvFunction name)) | numberOfInputs name == 0 = True
-      isBootNode _ = False
+      isBootNode _ (_, (LvConstant _)) = True
+      isBootNode _ (_, (LvFeedbackNode _)) = True
+      isBootNode i (_, (LvFunction _)) | numberOfInputs i vi == 0 = True
+      isBootNode _ _ = False
 
 feedInletsToVi :: [Maybe LvValue] -> LvState -> LvState
 feedInletsToVi inlets state =
@@ -590,16 +601,6 @@ getIndicator st idx def = fromMaybe def $ index (sIndicatorValues st) idx
 \section{Operations}
 
 \begin{code}
-
-numberOfInputs :: String -> Int
-numberOfInputs f
-   | f == "RandomNumber"     = 0
-   | f == "WaitUntilNextMs"  = 1
-   | f == "ArrayMax&Min"     = 2
-   | f == "Bundle"           = 2
-   | f == "InsertIntoArray"  = 2
-   | isOp f                  = 2
-   | otherwise               = error ("unknown function " ++ f)
 
 isOp f = f `elem` ["+", "-", "*", "/", ">", "<"]
 
