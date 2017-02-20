@@ -169,7 +169,7 @@ randomXY =
             ("Delay (sec)", LvControl (LvDBL 2.0))
          ]
          [ -- indicators
-            ("XY graph", LvIndicator (LvCluster [LvArray 1 (LvDBL 0.0), LvArray 1 (LvDBL 0.0)]))
+            ("XY graph", LvIndicator (LvCluster [LvArr (LvDBL 0.0) [], LvArr (LvDBL 0.0) []]))
          ]
          [ -- nodes
             ("1000", LvConstant (LvDBL 1000.00)),
