@@ -46,4 +46,4 @@ clean:
 	rm -f lv.hi lv.o lv LvInterpreter DemoLvInterpreter
 	rm -f graph*bmp
 	rm -f graph*dot
-
+	rm -f LvInterpreter.pdf DemoLvInterpreter.pdf

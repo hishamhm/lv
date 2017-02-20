@@ -100,30 +100,27 @@ data LvStrucType  =  LvWhile
 
 \end{code}
 
+Unlike LabVIEW, our implementation allows arbitrarily recursive types (e.g. a
+cluster of arrays of clusters). In the |LvArr| constructor, we have an 
+extra value that serves as a marker for the type of the array values.
+
 \begin{code}
 
-data LvValue  =  LvEXT Double
-              |  LvDBL Double
-              |  LvSGL Float
-              |  LvFXP Double
-              |  LvI64 Int
+data LvValue  =  LvDBL Double
               |  LvI32 Int
-              |  LvI16 Int
-              |  LvI8  Int
-              |  LvU64 Int
-              |  LvU32 Int
-              |  LvU16 Int
-              |  LvU8  Int
+              |  LvSTR String
               |  LvBool Bool
-              |  LvString String
               |  LvCluster [LvValue]
-              |  LvArray Int LvValue
-   deriving (Show, Eq)
+              |  LvArr LvValue [LvValue]
+   deriving (Show, Eq, Ord)
 
 \end{code}
 
-The following types were not implemented: CSG, CDB, CXT (single-precision,
-double-precision and extended-precision complex numbers).
+We chose to implement only one floating-point and one integer type. Besides
+the types listed above, LabVIEW includes the following types in total:
+extended and single-precision floating-point numbers; fixed-point numbers;
+signed and unsigned integers of 8, 16, 32 and 64 bits; single, double and
+extended-precision complex numbers.
 
 \begin{code}
 
@@ -608,14 +605,34 @@ isOp f = f `elem` ["+", "-", "*", "/", ">", "<"]
 
 applyFunction :: LvVisibleState -> String -> [LvValue] -> LvReturn
 
-applyFunction vst "+" args = numOp   (+) (+)  args
-applyFunction vst "-" args = numOp   (-) (-)  args
-applyFunction vst "*" args = numOp   (*) (*)  args
-applyFunction vst "/" args = numOp   (/) div  args
-applyFunction vst "<" args = boolOp  (<) (<)  args
-applyFunction vst ">" args = boolOp  (>) (>)  args
+applyFunction _ "RandomNumber" [] = LvReturn [LvDBL 0.5] -- not very random :)
 
-applyFunction vst "RandomNumber" [] = LvReturn [LvDBL 0.5] -- not very random :)
+applyFunction _ "ArrayMax&Min" [LvArr atype a] =
+   if null a
+   then LvReturn [zeroVal atype,  LvI32 0,       zeroVal atype,  LvI32 0]
+   else LvReturn [maxVal,         LvI32 maxIdx,  minVal,         LvI32 minIdx]
+        where
+           (maxVal, maxIdx) = foldPair (>) a
+           (minVal, minIdx) = foldPair (<) a
+           foldPair op l = foldl1 (\(a,i) (b,j) -> if op a b
+                                                   then (a,i)
+                                                   else (b,j))
+                                  (zip l (indices l))
+
+\end{code}
+
+
+
+\begin{code}
+
+applyFunction _ "InsertIntoArray" [LvArr t1 a, LvArr t2 []] | t1 == t2 =
+   LvReturn [LvArr t1 a]
+
+applyFunction _ "InsertIntoArray" [LvArr t1 a, LvArr t2 vs] | t1 == t2 =
+   LvReturn [LvArr t1 (a ++ vs)]
+
+applyFunction _ "InsertIntoArray" [LvArr t1 a, LvArr t2 vs, LvI32 idx] | t1 == t2 =
+   LvReturn [LvArr t1 (take idx a ++ vs ++ drop idx a)]
 
 applyFunction vst@(LvVisibleState ts) "WaitUntilNextMs" [LvI32 ms] =
    LvContinue $ LvKFunction waitUntil [LvI32 nextMs]
@@ -628,7 +645,14 @@ applyFunction vst@(LvVisibleState ts) "WaitUntilNextMs" [LvI32 ms] =
 applyFunction vst "WaitUntilNextMs" [LvDBL msd] =
    applyFunction vst "WaitUntilNextMs" [LvI32 (floor msd)]
 
-applyFunction vst fn args =
+applyFunction _ "+" args = numOp   (+) (+)  args
+applyFunction _ "-" args = numOp   (-) (-)  args
+applyFunction _ "*" args = numOp   (*) (*)  args
+applyFunction _ "/" args = numOp   (/) div  args
+applyFunction _ "<" args = boolOp  (<) (<)  args
+applyFunction _ ">" args = boolOp  (>) (>)  args
+
+applyFunction _ fn args =
    error ("No rule to apply " ++ fn ++ " " ++ show args)
 
 binOp opD typD _ _  [LvDBL a,  LvDBL b]  = LvReturn [typD (opD a b)]
@@ -640,6 +664,10 @@ binOp _ _ opI typI  _                    = undefined
 numOp opD opI args = binOp opD LvDBL opI LvI32 args
 
 boolOp opD opI args = binOp opD LvBool opI LvBool args
+
+zeroVal (LvDBL _) = LvDBL 0.0
+zeroVal (LvI32 _) = LvI32 0
+zeroVal (LvSTR _) = LvSTR ""
 
 \end{code}
 
