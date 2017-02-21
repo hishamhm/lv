@@ -656,6 +656,9 @@ base type).
 applyFunction _ "InsertIntoArray" (Just arr : Just vs : idxs) =
    LvReturn [insertIntoArray arr vs idxs]
 
+applyFunction _ "Bundle" args = 
+   LvReturn (catMaybes args)
+
 applyFunction vst@(LvVisibleState ts) "WaitUntilNextMs" [Just (LvI32 ms)] =
    LvContinue $ LvKFunction waitUntil [LvI32 nextMs]
    where
