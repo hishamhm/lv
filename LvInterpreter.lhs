@@ -640,21 +640,14 @@ applyFunction _ "ArrayMax&Min" [Just (LvArr a)] =
 
 \end{code}
 
-In LabVIEW, the "Insert Into Array" node has a variable number of indexing
-inputs depending on the number of dimensions of the array connected to it, but
-only one of these can be connected at a time. Its behavior changes depending
-on which of these inputs are connected: for example, when inserting a 1D array
-into a 2D array, if the first indexing input is connected, it inserts a new
-row into the matrix; if the second indexing output is connected, it inserts a
-new column. When inserting into a $n$-dimensional array, the value to be inserted
-must be either an $n$ or $(n-1)$-dimensional array (or in the case of inserting
-into a 1-D array, it must be either a 1-D array or an element of the array's
-base type).
-
 \begin{code}
 
 applyFunction _ "InsertIntoArray" (Just arr : Just vs : idxs) =
-   LvReturn [insertIntoArray arr vs idxs]
+   LvReturn [insertIntoArray arr vs (map numIdx idxs)]
+   where
+      numIdx i = case i of
+                 Nothing -> -1
+                 Just (LvI32 n) -> n
 
 applyFunction _ "Bundle" args = 
    LvReturn (catMaybes args)
@@ -709,15 +702,42 @@ resizeLower (x:_) ys = map (childResizer x) ys
 insertAt  i  lx ly = LvArr $ (take i lx) ++ ly ++ (drop i lx)
 recurseTo is lx ly = LvArr $ zipWith (\a b -> insertIntoArray a b is) lx ly
 
--- vx and vy have equal dimensions
-insertIntoArray vx@(LvArr lx@(LvArr x:_)) vy@(LvArr ly) (Just (LvI32 i)  : _ ) | vx `eqDim` vy = insertAt  i  lx (resizeLower lx ly)        -- inserting at the current dimension, resize lower dimensions of input
-insertIntoArray vx@(LvArr lx@(LvArr x:_)) vy@(LvArr ly) (Nothing         : is) | vx `eqDim` vy = recurseTo is lx (resizeCurr id lx ly)      -- inserting at a lower dimension, adjust current dimension of input
-insertIntoArray vx@(LvArr lx)             vy@(LvArr ly) (Just (LvI32 i)  : _ ) | vx `eqDim` vy = insertAt  i  lx ly                         -- base dimension: insert an array of integers as-is
+\end{code}
 
--- vx is one dimension bigger than vy
-insertIntoArray vx@(LvArr lx@(LvArr x:_)) vy@(LvArr ly) (Just (LvI32 i)  : _ ) | vx `neDim` vy = insertAt  i  lx [LvArr (resizeAll x ly)]   -- inserting at the current dimension, adjust size and insert
-insertIntoArray vx@(LvArr lx@(LvArr x:_)) vy@(LvArr ly) (Nothing         : is) | vx `neDim` vy = recurseTo is lx (resizeCurr id x ly)       -- inserting at a lower dimension, adjust size and insert
-insertIntoArray vx@(LvArr lx)             vy            (Just (LvI32 i)  : _ ) | vx `neDim` vy = insertAt  i  lx [vy]                       -- base dimension: inserting an integer
+In LabVIEW, the "Insert Into Array" node has a variable number of indexing
+inputs depending on the number of dimensions of the array connected to it, but
+only one of these can be connected at a time. Its behavior changes depending
+on which of these inputs are connected: for example, when inserting a 1D array
+into a 2D array, if the first indexing input is connected, it inserts a new
+row into the matrix; if the second indexing output is connected, it inserts a
+new column. When inserting into a $n$-dimensional array, the value to be inserted
+must be either an $n$ or $(n-1)$-dimensional array (or in the case of inserting
+into a 1-D array, it must be either a 1-D array or an element of the array's
+base type).
+
+\begin{code}
+
+insertIntoArray vx vy idxs =
+   case (vx, vy, idxs) of
+   (LvArr lx@(LvArr x:_),  LvArr ly,  (-1 : is))  -> recurseTo  is  lx (next x lx ly)
+   (LvArr lx@(LvArr x:_),  LvArr ly,  (i  : _ ))  -> insertAt   i   lx (curr x lx ly)
+   (LvArr lx,              _,         (i  : _ ))  -> insertAt   i   lx (base vy)
+   where
+      (next, curr, base) =
+         if ndims vx == ndims vy
+         then (  \x lx ly     -> resizeCurr id lx ly,
+                 \x lx ly     -> resizeLower lx ly,
+                 \(LvArr ly)  -> ly)
+         else (  \x lx ly     -> resizeCurr id x ly,
+                 \x lx ly     -> [LvArr (resizeAll x ly)],
+                 \vy          -> [vy])
+
+\end{code}
+
+The |numOp| and |boolOp| functions apply binary operations implementing
+coercion rules through the auxiliary function |binOp|.
+
+\begin{code}
 
 binOp opD typD _ _  [Just (LvDBL a),  Just (LvDBL b)]  = LvReturn [typD (opD a b)]
 binOp opD typD _ _  [Just (LvI32 a),  Just (LvDBL b)]  = LvReturn [typD (opD (fromIntegral a) b)]
@@ -733,6 +753,16 @@ mandatoryInputs "InsertIntoArray" = Just 2
 mandatoryInputs _ = Nothing
 
 \end{code}
+
+%-- vx and vy have equal dimensions
+%insertIntoArray vx@(LvArr lx) vy@(LvArr ly) (-1 : is  ) | vx `eqDim` vy = recurseTo  is  lx (resizeCurr id lx ly)      -- inserting at a lower dimension, adjust current dimension of input
+%insertIntoArray vx@(LvArr lx) vy@(LvArr ly) (i  : _   ) | vx `eqDim` vy = insertAt   i   lx (resizeLower lx ly)        -- inserting at the current dimension, resize lower dimensions of input
+%insertIntoArray vx@(LvArr lx) vy@(LvArr ly) (i  : _   ) | vx `eqDim` vy = insertAt   i   lx ly                         -- base dimension: insert an array of integers as-is
+%
+%-- vx is one dimension bigger than vy
+%insertIntoArray vx@(LvArr lx@(LvArr x:_))  vy@(LvArr ly)  (-1 : is  ) | vx `neDim` vy = recurseTo is lx (resizeCurr id x ly)       -- inserting at a lower dimension, adjust size and insert
+%insertIntoArray vx@(LvArr lx@(LvArr x:_))  vy@(LvArr ly)  (i  : _   ) | vx `neDim` vy = insertAt  i  lx [LvArr (resizeAll x ly)]   -- inserting at the current dimension, adjust size and insert
+%insertIntoArray vx@(LvArr lx)              vy             (i  : _   ) | vx `neDim` vy = insertAt  i  lx [vy]                       -- base dimension: inserting an integer
 
 %END LYX TEXT
 
