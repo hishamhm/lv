@@ -1,3 +1,5 @@
+%format i1 = "i_{1}"
+%format i2 = "i_{2}"
 %format opD = "op_{d}"
 %format opI = "op_{i}"
 %format typD = "typ_{d}"

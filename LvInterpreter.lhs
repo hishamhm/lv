@@ -25,7 +25,7 @@
 module LvInterpreter where
 
 import Data.Sequence (Seq, fromList, index, update, mapWithIndex, fromList, elemIndexL)
-import qualified Data.Sequence as Seq (length)
+import qualified Data.Sequence as Seq (length, take)
 import Data.List
 import Data.Maybe
 import Data.Foldable (toList)
@@ -111,7 +111,7 @@ data LvValue  =  LvDBL Double
               |  LvSTR String
               |  LvBool Bool
               |  LvCluster [LvValue]
-              |  LvArr LvValue [LvValue]
+              |  LvArr [LvValue]
    deriving (Show, Eq, Ord)
 
 \end{code}
@@ -378,8 +378,15 @@ shouldSchedule (name, node) inlets =
                      (name, LvTunControl) -> isNothing (index inlets cidx)
                      (name, LvTunSRControl) -> isNothing (index inlets cidx)
                      otherwise -> False
+      LvFunction name ->
+         elemIndexL Nothing mandatoryInlets == Nothing
+         where
+            mandatoryInlets =
+               case mandatoryInputs name of
+               Nothing -> inlets
+               Just n  -> Seq.take n inlets
       otherwise ->
-         elemIndexL Nothing inlets == Nothing -- all inlets have values
+         elemIndexL Nothing inlets == Nothing
 
 \end{code}
 
@@ -403,8 +410,8 @@ runNode (LvFunction name) state0 state1 inlets idx =
 
       ret =
          case k of
-         Nothing -> applyFunction (visible state1) name (catMaybes $ tsi $ inlets)
-         Just kf -> (kFn kf)      (visible state1)      (catMaybes $ tsi $ inlets)
+         Nothing -> applyFunction (visible state1) name inlets
+         Just kf -> (kFn kf)      (visible state1)      (catMaybes inlets)
    in
       trc ("firing function " ++ name) $
       case ret of
@@ -615,14 +622,14 @@ getIndicator st idx def = fromMaybe def $ index (sIndicatorValues st) idx
 
 isOp f = f `elem` ["+", "-", "*", "/", ">", "<"]
 
-applyFunction :: LvVisibleState -> String -> [LvValue] -> LvReturn
+applyFunction :: LvVisibleState -> String -> [Maybe LvValue] -> LvReturn
 
 applyFunction _ "RandomNumber" [] = LvReturn [LvDBL 0.5] -- not very random :)
 
-applyFunction _ "ArrayMax&Min" [LvArr atype a] =
+applyFunction _ "ArrayMax&Min" [Just (LvArr a)] =
    if null a
-   then LvReturn [zeroVal atype,  LvI32 0,       zeroVal atype,  LvI32 0]
-   else LvReturn [maxVal,         LvI32 maxIdx,  minVal,         LvI32 minIdx]
+   then LvReturn [LvDBL 0,  LvI32 0,       LvDBL 0,  LvI32 0]
+   else LvReturn [maxVal,   LvI32 maxIdx,  minVal,   LvI32 minIdx]
         where
            (maxVal, maxIdx) = foldPair (>) a
            (minVal, minIdx) = foldPair (<) a
@@ -633,20 +640,23 @@ applyFunction _ "ArrayMax&Min" [LvArr atype a] =
 
 \end{code}
 
-
+In LabVIEW, the "Insert Into Array" node has a variable number of indexing
+inputs depending on the number of dimensions of the array connected to it, but
+only one of these can be connected at a time. Its behavior changes depending
+on which of these inputs are connected: for example, when inserting a 1D array
+into a 2D array, if the first indexing input is connected, it inserts a new
+row into the matrix; if the second indexing output is connected, it inserts a
+new column. When inserting into a $n$-dimensional array, the value to be inserted
+must be either an $n$ or $(n-1)$-dimensional array (or in the case of inserting
+into a 1-D array, it must be either a 1-D array or an element of the array's
+base type).
 
 \begin{code}
 
-applyFunction _ "InsertIntoArray" [LvArr t1 a, LvArr t2 []] | t1 == t2 =
-   LvReturn [LvArr t1 a]
+applyFunction _ "InsertIntoArray" (Just arr : Just vs : idxs) =
+   LvReturn [insertIntoArray arr vs idxs]
 
-applyFunction _ "InsertIntoArray" [LvArr t1 a, LvArr t2 vs] | t1 == t2 =
-   LvReturn [LvArr t1 (a ++ vs)]
-
-applyFunction _ "InsertIntoArray" [LvArr t1 a, LvArr t2 vs, LvI32 idx] | t1 == t2 =
-   LvReturn [LvArr t1 (take idx a ++ vs ++ drop idx a)]
-
-applyFunction vst@(LvVisibleState ts) "WaitUntilNextMs" [LvI32 ms] =
+applyFunction vst@(LvVisibleState ts) "WaitUntilNextMs" [Just (LvI32 ms)] =
    LvContinue $ LvKFunction waitUntil [LvI32 nextMs]
    where
       nextMs = ts - (ts `mod` ms) + ms
@@ -654,8 +664,8 @@ applyFunction vst@(LvVisibleState ts) "WaitUntilNextMs" [LvI32 ms] =
          | ts >= nextMs = LvReturn []
          | otherwise    = LvContinue $ LvKFunction waitUntil arg
 
-applyFunction vst "WaitUntilNextMs" [LvDBL msd] =
-   applyFunction vst "WaitUntilNextMs" [LvI32 (floor msd)]
+applyFunction vst "WaitUntilNextMs" [Just (LvDBL msd)] =
+   applyFunction vst "WaitUntilNextMs" [Just (LvI32 (floor msd))]
 
 applyFunction _ "+" args = numOp   (+) (+)  args
 applyFunction _ "-" args = numOp   (-) (-)  args
@@ -667,19 +677,57 @@ applyFunction _ ">" args = boolOp  (>) (>)  args
 applyFunction _ fn args =
    error ("No rule to apply " ++ fn ++ " " ++ show args)
 
-binOp opD typD _ _  [LvDBL a,  LvDBL b]  = LvReturn [typD (opD a b)]
-binOp opD typD _ _  [LvI32 a,  LvDBL b]  = LvReturn [typD (opD (fromIntegral a) b)]
-binOp opD typD _ _  [LvDBL a,  LvI32 b]  = LvReturn [typD (opD a (fromIntegral b))]
-binOp _ _ opI typI  [LvI32 a,  LvI32 b]  = LvReturn [typI (opI a b)]
-binOp _ _ opI typI  _                    = undefined
+ndims :: LvValue -> Int
+ndims (LvArr (v:vs)) = 1 + ndims v
+ndims _              = 0
 
-numOp opD opI args = binOp opD LvDBL opI LvI32 args
+eqDim a b = ndims a == ndims b
+neDim a b = ndims a == ndims b + 1
 
-boolOp opD opI args = binOp opD LvBool opI LvBool args
+zero :: LvValue -> LvValue
+zero (LvArr l@(x : xs)) = LvArr (replicate (length l) (zero x))
+zero (LvDBL _)          = LvDBL 0.0
+zero (LvI32 _)          = LvI32 0
+zero (LvSTR _)          = LvSTR ""
 
-zeroVal (LvDBL _) = LvDBL 0.0
-zeroVal (LvI32 _) = LvI32 0
-zeroVal (LvSTR _) = LvSTR ""
+resizeCurr :: (LvValue -> LvValue) -> [LvValue] -> [LvValue] -> [LvValue]
+resizeCurr childOp xs@(x:_) ys = map childOp $ take (length xs) $ ys ++ (repeat . zero) x
+
+childResizer :: LvValue -> (LvValue -> LvValue)
+childResizer (LvArr x) = \(LvArr a) -> LvArr (resizeAll x a)
+childResizer (LvI32 _) = id
+
+resizeAll :: [LvValue] -> [LvValue] -> [LvValue]
+resizeAll xs@(x:_) ys = resizeCurr (childResizer x) xs ys
+
+resizeLower :: [LvValue] -> [LvValue] -> [LvValue]
+resizeLower (x:_) ys = map (childResizer x) ys
+
+insertAt  i  lx ly = LvArr $ (take i lx) ++ ly ++ (drop i lx)
+recurseTo is lx ly = LvArr $ zipWith (\a b -> insertIntoArray a b is) lx ly
+
+-- vx and vy have equal dimensions
+insertIntoArray vx@(LvArr lx@(LvArr x:_)) vy@(LvArr ly) (Just (LvI32 i)  : _ ) | vx `eqDim` vy = insertAt  i  lx (resizeLower lx ly)        -- inserting at the current dimension, resize lower dimensions of input
+insertIntoArray vx@(LvArr lx@(LvArr x:_)) vy@(LvArr ly) (Nothing         : is) | vx `eqDim` vy = recurseTo is lx (resizeCurr id lx ly)      -- inserting at a lower dimension, adjust current dimension of input
+insertIntoArray vx@(LvArr lx)             vy@(LvArr ly) (Just (LvI32 i)  : _ ) | vx `eqDim` vy = insertAt  i  lx ly                         -- base dimension: insert an array of integers as-is
+
+-- vx is one dimension bigger than vy
+insertIntoArray vx@(LvArr lx@(LvArr x:_)) vy@(LvArr ly) (Just (LvI32 i)  : _ ) | vx `neDim` vy = insertAt  i  lx [LvArr (resizeAll x ly)]   -- inserting at the current dimension, adjust size and insert
+insertIntoArray vx@(LvArr lx@(LvArr x:_)) vy@(LvArr ly) (Nothing         : is) | vx `neDim` vy = recurseTo is lx (resizeCurr id x ly)       -- inserting at a lower dimension, adjust size and insert
+insertIntoArray vx@(LvArr lx)             vy            (Just (LvI32 i)  : _ ) | vx `neDim` vy = insertAt  i  lx [vy]                       -- base dimension: inserting an integer
+
+binOp opD typD _ _  [Just (LvDBL a),  Just (LvDBL b)]  = LvReturn [typD (opD a b)]
+binOp opD typD _ _  [Just (LvI32 a),  Just (LvDBL b)]  = LvReturn [typD (opD (fromIntegral a) b)]
+binOp opD typD _ _  [Just (LvDBL a),  Just (LvI32 b)]  = LvReturn [typD (opD a (fromIntegral b))]
+binOp _ _ opI typI  [Just (LvI32 a),  Just (LvI32 b)]  = LvReturn [typI (opI a b)]
+binOp _ _ opI typI  _                                  = undefined
+
+numOp opD opI = binOp opD LvDBL opI LvI32
+
+boolOp opD opI = binOp opD LvBool opI LvBool
+
+mandatoryInputs "InsertIntoArray" = Just 2
+mandatoryInputs _ = Nothing
 
 \end{code}
 

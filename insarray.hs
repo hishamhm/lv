@@ -5,28 +5,43 @@ data LvValue = LvINT Int
              | LvArr [LvValue]
    deriving Show
 
+ndims :: LvValue -> Int
 ndims (LvArr (v:vs)) = 1 + ndims v
-ndims _ = 0
+ndims _              = 0
 
+zero :: LvValue -> LvValue
 zero (LvArr l@(x : xs)) = LvArr (replicate (length l) (zero x))
 zero (LvINT _)          = (LvINT 0)
 
-resizeDim :: (LvValue -> LvValue) -> [LvValue] -> [LvValue] -> [LvValue]
-resizeDim conv xs@(x:_) ys = map conv $ take (length xs) $ ys ++ (repeat . zero) x
+resizeCurr :: (LvValue -> LvValue) -> [LvValue] -> [LvValue] -> [LvValue]
+resizeCurr childOp xs@(x:_) ys = map childOp $ take (length xs) $ ys ++ (repeat . zero) x
 
-resize :: [LvValue] -> [LvValue] -> [LvValue]
-resize xs@(LvArr x:_) ys = resizeDim (\(LvArr a) -> LvArr (resize x a)) xs ys
-resize xs@(LvINT x:_) ys = take (length xs) $ ys ++ repeat (LvINT 0)
+childResizer :: LvValue -> (LvValue -> LvValue)
+childResizer (LvArr x) = \(LvArr a) -> LvArr (resizeAll x a)
+childResizer (LvINT _) = id
 
-resizeLower xs@(LvArr x:_) ys = map (\(LvArr a) -> LvArr (resize x a)) ys
-resizeLower xs@(LvINT x:_) ys = ys
+resizeAll :: [LvValue] -> [LvValue] -> [LvValue]
+resizeAll xs@(x:_) ys = resizeCurr (childResizer x) xs ys
 
-insertIntoArray vx@(LvArr lx@(LvINT x:_)) vy@(LvINT ly) [Just i] | ndims vx == ndims vy + 1 =  LvArr ((take i lx) ++ [vy] ++ (drop i lx))
-insertIntoArray vx@(LvArr lx@(LvArr x:_)) vy@(LvArr ly) [Just i] | ndims vx == ndims vy + 1 =  LvArr ((take i lx) ++ [LvArr (resize x ly)] ++ (drop i lx))
-insertIntoArray vx@(LvArr lx@(LvArr x:_)) vy@(LvArr ly) (Nothing: idxs) | ndims vx == ndims vy + 1 = LvArr (zipWith (\a b -> insertIntoArray a b idxs) lx (resize x ly))
-insertIntoArray vx@(LvArr lx@(LvINT x:_)) vy@(LvArr ly) [Just i] | ndims vx == ndims vy = LvArr ((take i lx) ++ ly ++ (drop i lx))
-insertIntoArray vx@(LvArr lx@(LvArr x:_)) vy@(LvArr ly) [Just i] | ndims vx == ndims vy = LvArr ((take i lx) ++ (resizeLower lx ly) ++ (drop i lx))
-insertIntoArray vx@(LvArr lx@(LvArr x:_)) vy@(LvArr ly) (Nothing: idxs) | ndims vx == ndims vy = LvArr (zipWith (\a b -> insertIntoArray a b idxs) lx (resizeDim id lx ly))
+resizeLower :: [LvValue] -> [LvValue] -> [LvValue]
+resizeLower (x:_) ys = map (childResizer x) ys
+
+insertAt  i  lx ly = LvArr $ (take i lx) ++ ly ++ (drop i lx)
+recurseTo is lx ly = LvArr $ zipWith (\a b -> insertIntoArray a b is) lx ly
+
+eqDim a b = ndims a == ndims b
+neDim a b = ndims a == ndims b + 1
+
+-- vx and vy have equal dimensions
+insertIntoArray vx@(LvArr lx@(LvINT x:_)) vy@(LvArr ly) (Just i  : _)  | vx `eqDim` vy = insertAt  i  lx ly                         -- base dimension: insert an array of integers as-is
+insertIntoArray vx@(LvArr lx@(LvArr x:_)) vy@(LvArr ly) (Just i  : _)  | vx `eqDim` vy = insertAt  i  lx (resizeLower lx ly)        -- inserting at the current dimension, resize lower dimensions of input
+insertIntoArray vx@(LvArr lx@(LvArr x:_)) vy@(LvArr ly) (Nothing : is) | vx `eqDim` vy = recurseTo is lx (resizeCurr id lx ly)      -- inserting at a lower dimension, adjust current dimension of input
+
+-- vx is one dimension bigger than vy
+insertIntoArray vx@(LvArr lx@(LvINT x:_)) vy@(LvINT ly) (Just i  : _)  | vx `neDim` vy = insertAt  i  lx [vy]                       -- base dimension: inserting an integer
+insertIntoArray vx@(LvArr lx@(LvArr x:_)) vy@(LvArr ly) (Just i  : _)  | vx `neDim` vy = insertAt  i  lx [LvArr (resizeAll x ly)]   -- inserting at the current dimension, adjust size and insert
+insertIntoArray vx@(LvArr lx@(LvArr x:_)) vy@(LvArr ly) (Nothing : is) | vx `neDim` vy = recurseTo is lx (resizeCurr id x ly)       -- inserting at a lower dimension, adjust size and insert
+
 
 arr1 a = LvArr (map LvINT a)
 arr2 a = LvArr a
