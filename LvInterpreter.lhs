@@ -340,11 +340,19 @@ fire vi value addr state =
          then propagate value vi dst state
          else state
 
-propagate value _ dst@(LvPortAddr LvI dnode dport) state =
-   state {
-      sTs = ((sTs state) + 1),
-      sIndicatorValues = update dnode (Just value) (sIndicatorValues state)
-   }
+propagate value vi dst@(LvPortAddr LvI dnode dport) state =
+   let
+      (_, indicator) = vIndicators vi !! dnode
+      newValue = case indicator of
+                 LvIndicator _                 -> value
+                 LvSRIndicator _               -> value
+                 LvTunIndicator LvLastValue    -> value
+                 LvTunIndicator LvAutoIndexing -> insertIntoArray (fromMaybe (LvArr []) (index (sIndicatorValues state) dnode)) value []
+   in
+      state {
+         sTs = ((sTs state) + 1),
+         sIndicatorValues = update dnode (Just newValue) (sIndicatorValues state)
+      }
 
 propagate value vi dst@(LvPortAddr dtype dnode dport) state =
    state {
@@ -442,6 +450,8 @@ runNode (LvFeedbackNode initVal) _ state1 inlets _ =
 
 \begin{code}
 
+-- TODO for when no N is set and an array is given as input tunnel
+-- TODO check what happens when both are given
 runNode (LvStructure LvFor subVi) state0 state1 inlets idx =
    trc ("firing for") $
    loopStructure subVi shouldStop state0 state1 idx inlets
@@ -675,6 +685,7 @@ applyFunction _ fn args =
 
 ndims :: LvValue -> Int
 ndims (LvArr (v:vs)) = 1 + ndims v
+ndims (LvArr [])     = 1
 ndims _              = 0
 
 eqDim a b = ndims a == ndims b
@@ -719,9 +730,11 @@ base type).
 
 insertIntoArray vx vy idxs =
    case (vx, vy, idxs) of
+   (LvArr lx, vy, []) -> insertIntoArray vx vy [length lx]
    (LvArr lx@(LvArr x:_),  LvArr ly,  (-1 : is))  -> recurseTo  is  lx (next x lx ly)
    (LvArr lx@(LvArr x:_),  LvArr ly,  (i  : _ ))  -> insertAt   i   lx (curr x lx ly)
    (LvArr lx,              _,         (i  : _ ))  -> insertAt   i   lx (base vy)
+   _ -> error ("WHAT " ++ show vx ++ " " ++ show vy ++ " " ++ show idxs)
    where
       (next, curr, base) =
          if ndims vx == ndims vy

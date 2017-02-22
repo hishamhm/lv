@@ -23,7 +23,7 @@ main =
    do
       print program
       loop (initialState 0 program) program
-         where program = testingWhile
+         where program = randomXY
 
 \end{code}
 
