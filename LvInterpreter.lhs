@@ -660,7 +660,7 @@ applyFunction _ "InsertIntoArray" (Just arr : Just vs : idxs) =
                  Just (LvI32 n) -> n
 
 applyFunction _ "Bundle" args = 
-   LvReturn (catMaybes args)
+   LvReturn [LvCluster (catMaybes args)]
 
 applyFunction vst@(LvVisibleState ts) "WaitUntilNextMs" [Just (LvI32 ms)] =
    LvContinue $ LvKFunction waitUntil [LvI32 nextMs]
