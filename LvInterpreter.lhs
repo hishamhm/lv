@@ -769,16 +769,6 @@ mandatoryInputs _ = Nothing
 
 \end{code}
 
-%-- vx and vy have equal dimensions
-%insertIntoArray vx@(LvArr lx) vy@(LvArr ly) (-1 : is  ) | vx `eqDim` vy = recurseTo  is  lx (resizeCurr id lx ly)      -- inserting at a lower dimension, adjust current dimension of input
-%insertIntoArray vx@(LvArr lx) vy@(LvArr ly) (i  : _   ) | vx `eqDim` vy = insertAt   i   lx (resizeLower lx ly)        -- inserting at the current dimension, resize lower dimensions of input
-%insertIntoArray vx@(LvArr lx) vy@(LvArr ly) (i  : _   ) | vx `eqDim` vy = insertAt   i   lx ly                         -- base dimension: insert an array of integers as-is
-%
-%-- vx is one dimension bigger than vy
-%insertIntoArray vx@(LvArr lx@(LvArr x:_))  vy@(LvArr ly)  (-1 : is  ) | vx `neDim` vy = recurseTo is lx (resizeCurr id x ly)       -- inserting at a lower dimension, adjust size and insert
-%insertIntoArray vx@(LvArr lx@(LvArr x:_))  vy@(LvArr ly)  (i  : _   ) | vx `neDim` vy = insertAt  i  lx [LvArr (resizeAll x ly)]   -- inserting at the current dimension, adjust size and insert
-%insertIntoArray vx@(LvArr lx)              vy             (i  : _   ) | vx `neDim` vy = insertAt  i  lx [vy]                       -- base dimension: inserting an integer
-
 %END LYX TEXT
 
 \end{document}
