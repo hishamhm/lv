@@ -354,7 +354,7 @@ propagate value vi dst@(LvPortAddr LvI dnode dport) state =
          sIndicatorValues = update dnode (Just newValue) (sIndicatorValues state)
       }
 
-propagate value vi dst@(LvPortAddr dtype dnode dport) state =
+propagate value vi dst@(LvPortAddr LvN dnode dport) state =
    state {
       sTs = ((sTs state) + 1),
       sSched = sched',
@@ -369,7 +369,7 @@ propagate value vi dst@(LvPortAddr dtype dnode dport) state =
       nstates' = update dnode nstate' nstates
       sched' =
          let
-            entry = LvNodeAddr dtype dnode
+            entry = LvNodeAddr LvN dnode
          in
             if shouldSchedule (vNodes vi !! dnode) inlets' && not (entry `elem` sched)
             then sched ++ [entry]
