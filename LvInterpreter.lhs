@@ -510,7 +510,7 @@ loopStructure loopVi shouldStop state0 state1 idx inlets =
          sNodeStates = update idx nstate' nstates
       }
       pvs = map (\(p,v) -> (p, fromMaybe undefined v))
-          $ filter (\(p,v) -> not $ isNothing v)
+          $ filter (\(p,v) -> isJust v)
           $ zip (indices $ vIndicators loopVi) (toList $ sIndicatorValues statek') 
    in
       if isJust nextk 
