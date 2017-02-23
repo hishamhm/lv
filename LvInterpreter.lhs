@@ -393,6 +393,8 @@ shouldSchedule (name, node) inlets =
                case mandatoryInputs name of
                Nothing -> inlets
                Just n  -> Seq.take n inlets
+      LvFeedbackNode name ->
+         False
       otherwise ->
          elemIndexL Nothing inlets == Nothing
 

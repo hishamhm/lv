@@ -214,8 +214,8 @@ randomXY =
             ("insert values", (LvFunction "InsertIntoArray")),
             ("bundle", (LvFunction "Bundle")),
             ("max key", (LvFunction "ArrayMax&Min")),
-            ("feedback to keys array", (LvFeedbackNode (LvDBL 0.0))),
-            ("feedback to values array", (LvFeedbackNode (LvDBL 0.0))),
+            ("feedback to keys array", (LvFeedbackNode (LvArr []))),
+            ("feedback to values array", (LvFeedbackNode (LvArr []))),
             ("feedback to loop", (LvFeedbackNode (LvDBL 0.0)))
          ]
          [ -- wires
