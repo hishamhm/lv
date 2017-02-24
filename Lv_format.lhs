@@ -13,3 +13,5 @@
 %format srcPort'
 %format dstPort'
 %format (LvPortAddr t n p) = "\llparenthesis " t ", " n ", " p "\rrparenthesis "
+
+%format LvState = "\hyperlink{LvState}{LvState}"

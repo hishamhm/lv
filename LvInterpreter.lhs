@@ -1,6 +1,12 @@
 \documentclass[a4paper]{article}
 %\setlength{\parskip}{\baselineskip}
 \usepackage[margin=3cm]{geometry}
+\usepackage{color}
+\definecolor{darkblue}{rgb}{0,0,0.5}
+\usepackage[unicode=true,pdfusetitle,
+ bookmarks=true,bookmarksnumbered=false,bookmarksopen=false,
+ breaklinks=true,pdfborder={0 0 0},backref=false,colorlinks=true,linkcolor=darkblue]
+ {hyperref}
 
 %BEGIN LYX PREAMBLE
 
@@ -89,13 +95,10 @@ data LvTunnelMode  =  LvAutoIndexing -- TODO implement
 data LvNode  =  LvSubVI LvVI
              |  LvFunction String
              |  LvConstant LvValue
-             |  LvStructure LvStrucType LvVI
+             |  LvWhile LvVI
+             |  LvFor LvVI
+             |  LvSequence [LvVI]
              |  LvFeedbackNode LvValue
-   deriving Show
-
-data LvStrucType  =  LvWhile
-                  |  LvFor
-                     -- TODO LvSequence
    deriving Show
 
 \end{code}
@@ -144,7 +147,8 @@ data LvNodeType  =  LvN
 
 \begin{code}
 
-data LvState =  LvState {
+{-"\hypertarget{LvState}{}\nolinebreak"-}
+data LvState =  LvState { 
                    sTs :: Int,
                    sSched :: [LvNodeAddr],
                    sNodeStates :: Seq LvNodeState,
@@ -231,12 +235,16 @@ makeVI controls indicators nodes stringWires =
       findNode entries etype nodeEntries name port =
          let
             findPort es = elemIndex name $ map fst es
+
+            findInVI idx vi = 
+               case findPort (nodeEntries vi) of
+                  Just i -> Just (idx, i)
+                  Nothing -> Nothing
             
             checkNode :: Int -> (String, LvNode) -> Maybe (Int, Int)
-            checkNode nodeIdx (_, LvStructure _ nodeVI) =
-               case findPort (nodeEntries nodeVI) of
-                  Just i -> Just (nodeIdx, i)
-                  Nothing -> Nothing
+            checkNode nodeIdx (_, LvWhile nodeVI) = findInVI nodeIdx nodeVI
+            checkNode nodeIdx (_, LvFor nodeVI) = findInVI nodeIdx nodeVI
+            checkNode nodeIdx (_, LvSequence [nodeVIs]) = error "TODO" -- TODO
             checkNode nodeIdx (nodeName, node)
                | name == nodeName  = Just (nodeIdx, port)
                | otherwise         = Nothing
@@ -310,7 +318,7 @@ runThing q@(LvNodeAddr LvN idx) state0 mainVi =
          Just (LvKFunction kfn kargs) -> map Just kargs
          Just (LvKState st) -> trc "reading inlets from KState!?" $ undefined
       (name, node) = vNodes mainVi !! idx
-      (state2, pvs) = runNode node state0 state1 inlets idx
+      (state2, pvs) = runNode node state1 inlets idx
    in
       foldl' (\s (p, v) -> fire mainVi v (LvPortAddr LvN idx p) s) state2 pvs
 
@@ -371,21 +379,16 @@ propagate value vi dst@(LvPortAddr LvN dnode dport) state =
          let
             entry = LvNodeAddr LvN dnode
          in
-            if shouldSchedule (vNodes vi !! dnode) inlets' && not (entry `elem` sched)
+            if shouldSchedule (snd $ vNodes vi !! dnode) inlets' && not (entry `elem` sched)
             then sched ++ [entry]
             else sched
 
-shouldSchedule :: (String, LvNode) -> Seq (Maybe LvValue) -> Bool
-shouldSchedule (name, node) inlets =
+shouldSchedule :: LvNode -> Seq (Maybe LvValue) -> Bool
+shouldSchedule node inlets =
    case node of
-      LvStructure typ vi ->
-         find unfilledTunnel (indices $ vControls vi) == Nothing
-            where
-               unfilledTunnel cidx = 
-                  case vControls vi !! cidx of
-                     (name, LvTunControl) -> isNothing (index inlets cidx)
-                     (name, LvTunSRControl) -> isNothing (index inlets cidx)
-                     otherwise -> False
+      LvWhile vi -> shouldScheduleSubVi vi inlets
+      LvFor vi -> shouldScheduleSubVi vi inlets
+      LvSequence vis -> error "TODO" -- TODO
       LvFunction name ->
          elemIndexL Nothing mandatoryInlets == Nothing
          where
@@ -398,22 +401,33 @@ shouldSchedule (name, node) inlets =
       otherwise ->
          elemIndexL Nothing inlets == Nothing
 
+shouldScheduleSubVi :: LvVI -> Seq (Maybe LvValue) -> Bool
+shouldScheduleSubVi vi inlets = 
+   find unfilledTunnel (indices $ vControls vi) == Nothing
+      where
+         unfilledTunnel cidx = 
+            case vControls vi !! cidx of
+               (name, LvTunControl) -> isNothing (index inlets cidx)
+               (name, LvTunSRControl) -> isNothing (index inlets cidx)
+               otherwise -> False
+
 \end{code}
 
 \subsection{Nodes}
 
 \begin{code}
 
-runNode ::  LvNode -> LvState -> LvState -> [Maybe LvValue] -> Int
+runNode ::  LvNode -> LvState -> [Maybe LvValue] -> Int
             -> (LvState, [(Int, LvValue)])
 
-runNode (LvSubVI subVi) _ state1 _ _ = (state1, []) -- TODO initialize state, run subvi
+runNode (LvSubVI subVi) state1 _ _ = (state1, []) -- TODO initialize state, run subvi
 
-runNode (LvFunction name) state0 state1 inlets idx =
+runNode (LvFunction name) state1 inlets idx =
    let
-      nstates = sNodeStates state0 -- REFACTOR was 0
-      nstate@(LvNodeState _ k values) = index nstates idx
+      nstates = sNodeStates state1 -- REFACTOR was 0
+      nstate@(LvNodeState _ k _) = index nstates idx
       q = (LvNodeAddr LvN idx)
+      --values = fromList inlets
 
       visible :: LvState -> LvVisibleState
       visible state = LvVisibleState (sTs state)
@@ -428,12 +442,12 @@ runNode (LvFunction name) state0 state1 inlets idx =
       LvReturn outVals ->
          (state2, pvs)
          where
-            state2 = updateNode idx state1 (LvNodeState name Nothing values) []
+            state2 = updateNode idx state1 nstate{ nsCont = Nothing } []
             pvs = zip (indices outVals) outVals
       LvContinue k' ->
-         (updateNode idx state1 (LvNodeState name (Just k') values) [q], [])
+         (updateNode idx state1 nstate{ nsCont = Just k' } [q], [])
 
-runNode (LvConstant value) _ state1 _ _ =
+runNode (LvConstant value) state1 _ _ =
    trc ("firing constant " ++ show value) $
    (state1, [(0, value)])
 
@@ -445,7 +459,7 @@ is implied.
 
 \begin{code}
 
-runNode (LvFeedbackNode initVal) _ state1 inlets _ =
+runNode (LvFeedbackNode initVal) state1 inlets _ =
    (state1, [(0, fromMaybe initVal (inlets !! 0) )])
 
 \end{code}
@@ -454,9 +468,9 @@ runNode (LvFeedbackNode initVal) _ state1 inlets _ =
 
 -- TODO for when no N is set and an array is given as input tunnel
 -- TODO check what happens when both are given
-runNode (LvStructure LvFor subVi) state0 state1 inlets idx =
+runNode (LvFor subVi) state1 inlets idx =
    trc ("firing for") $
-   loopStructure subVi shouldStop state0 state1 idx inlets
+   loopStructure subVi shouldStop state1 idx inlets
    where
       shouldStop st =
          trc (show i' ++ " >= " ++ show n) $ (i' >= n)
@@ -465,9 +479,9 @@ runNode (LvStructure LvFor subVi) state0 state1 inlets idx =
             i' = i + 1
             LvI32 n = coerceToInt $ getControl st nIndex (LvI32 0)
 
-runNode (LvStructure LvWhile subVi) state0 state1 inlets idx =
+runNode (LvWhile subVi) state1 inlets idx =
    trc ("firing while") $
-   loopStructure subVi shouldStop state0 state1 idx inlets
+   loopStructure subVi shouldStop state1 idx inlets
    where
       shouldStop st =
          not test
@@ -479,11 +493,11 @@ runNode (LvStructure LvWhile subVi) state0 state1 inlets idx =
 
 \begin{code}
 
-loopStructure ::  LvVI -> (LvState -> Bool) -> LvState -> LvState -> Int
+loopStructure ::  LvVI -> (LvState -> Bool) -> LvState -> Int
                   -> [Maybe LvValue] -> (LvState, [(Int, LvValue)])
-loopStructure loopVi shouldStop state0 state1 idx inlets =
+loopStructure loopVi shouldStop state1 idx inlets =
    let
-      nstates = sNodeStates state0 -- REFACTOR was 0
+      nstates = sNodeStates state1
       nstate@(LvNodeState name k values) = index nstates idx
       q = (LvNodeAddr LvN idx)
 
@@ -506,7 +520,7 @@ loopStructure loopVi shouldStop state0 state1 idx inlets =
                where (LvI32 i) = getControl statek' iIndex (LvI32 999)
       nstate' = (LvNodeState name nextk values)
       thisq = if isJust nextk then [q] else []
-      state2 = state1 { -- REFACTOR state0 to state1
+      state2 = state1 {
          sTs = (sTs statek') + 1,
          sSched = (sSched state1) ++ thisq,
          sNodeStates = update idx nstate' nstates
@@ -554,7 +568,9 @@ initialState ts vi =
       nInlets _ (LvSubVI vi)        = length $ vControls vi
       nInlets i (LvFunction _)      = numberOfInputs i vi
       nInlets _ (LvConstant v)      = 0
-      nInlets _ (LvStructure _ vi)  = length $ vControls vi
+      nInlets _ (LvFor vi)          = length $ vControls vi
+      nInlets _ (LvWhile vi)        = length $ vControls vi
+      nInlets _ (LvSequence vi)     = error "TODO" -- TODO
       nInlets _ (LvFeedbackNode v)  = 1
       makeControlValue :: LvControl -> Maybe LvValue
       makeControlValue (LvControl    v)  = Just v

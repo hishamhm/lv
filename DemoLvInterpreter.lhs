@@ -23,7 +23,7 @@ main =
    do
       print program
       loop (initialState 0 program) program
-         where program = randomXY
+         where program = randomXY --testingWhile
 
 \end{code}
 
@@ -46,7 +46,7 @@ testingFor =
          ]
          [ -- nodes
             -- |("0", LvConstant (LvDBL 0.00)),| -- ***
-            ("For loop", LvStructure LvFor (makeVI
+            ("For loop", LvFor (makeVI
                [ -- controls
                   ("i", LvAutoControl),
                   ("N", LvTunControl),
@@ -92,7 +92,7 @@ testingWhile =
          ]
          [ -- nodes
             --("0", LvConstant (LvDBL 0.00)), -- ***
-            ("For loop", LvStructure LvFor (makeVI
+            ("For loop", LvFor (makeVI
                [ -- controls
                   ("i", LvAutoControl),
                   ("N", LvTunControl),
@@ -115,7 +115,7 @@ testingWhile =
                   zwire "100" "WaitUntilNextMs"
                ]
             )),
-            ("While loop", LvStructure LvWhile (makeVI
+            ("While loop", LvWhile (makeVI
                [ -- controls
                   ("i", LvAutoControl),
                   ("while tunnel", LvTunControl)
@@ -174,7 +174,7 @@ randomXY =
          [ -- nodes
             ("1000", LvConstant (LvDBL 1000.00)),
             ("Delay * 1000", LvFunction "*"),
-            ("For loop", LvStructure LvFor (makeVI
+            ("For loop", LvFor (makeVI
                [ -- controls
                   ("i", LvAutoControl),
                   ("N", LvTunControl),
