@@ -33,6 +33,7 @@ module LvInterpreter where
 import Data.Sequence (Seq, fromList, index, update, mapWithIndex, fromList, elemIndexL)
 import qualified Data.Sequence as Seq (length, take)
 import Data.List
+import Data.List.Split
 import Data.Maybe
 import Data.Foldable (toList)
 import Data.Generics.Aliases (orElse)
@@ -208,7 +209,7 @@ indices l = [0 .. (length l - 1)]
 
 \begin{code}
 
-data LvStringWire = LvStringWire (String, Int) (String, Int)
+data LvStringWire = LvStringWire String String
    deriving Show
 
 makeVI ::  [(String, LvControl)] -> [(String, LvIndicator)]
@@ -222,40 +223,38 @@ makeVI controls indicators nodes stringWires =
    }
    where
       convert :: LvStringWire -> LvWire      
-      convert (LvStringWire (src, srcPort) (dst, dstPort)) =
+      convert (LvStringWire src dst) =
          let
-            (srcType,  srcNode,  srcPort')  = findNode controls    LvC  vIndicators  src  srcPort
-            (dstType,  dstNode,  dstPort')  = findNode indicators  LvI  vControls    dst  dstPort
+            (srcType,  srcNode,  srcPort')  = findNode controls    LvC  vIndicators  src
+            (dstType,  dstNode,  dstPort')  = findNode indicators  LvI  vControls    dst
          in
             LvWire (LvPortAddr srcType srcNode srcPort') (LvPortAddr dstType dstNode dstPort')
 
-      findNode ::  [(String, a)] -> LvNodeType -> (LvVI -> [(String, b)])
-                   -> String -> Int -> (LvNodeType, Int, Int)
-      findNode entries etype nodeEntries name port =
-         let
-            findPort es = elemIndex name $ map fst es
+      findIndex :: [(String, a)] -> String -> Maybe Int
+      findIndex es name = elemIndex name $ map fst es
+      
+      must :: (String -> Maybe a) -> String -> a
+      must fn name = fromMaybe (error ("No such entry " ++ name)) (fn name)
 
-            findInVI idx vi = 
-               case findPort (nodeEntries vi) of
-                  Just i -> Just (idx, i)
-                  Nothing -> Nothing
-            
-            checkNode :: Int -> (String, LvNode) -> Maybe (Int, Int)
-            checkNode nodeIdx (_, LvWhile nodeVi) = findInVI nodeIdx nodeVi
-            checkNode nodeIdx (_, LvFor nodeVi) = findInVI nodeIdx nodeVi
-            checkNode nodeIdx (_, LvSequence nodeVi) = findInVI nodeIdx nodeVi
-            checkNode nodeIdx (_, LvCase nodeVis) = findInVI nodeIdx (head nodeVis)
-            checkNode nodeIdx (nodeName, _)
-               | name == nodeName  = Just (nodeIdx, port)
-               | otherwise         = Nothing
-         in
-            case findPort entries of
-               Just i -> (etype, i, port)
-               Nothing -> case find isJust
-                               $ toList $ mapWithIndex checkNode (fromList nodes) of
-                  Just (Just (node, nodePort)) -> (LvN, node, nodePort)
-                  Nothing -> error ("No such wire " ++ name ++
-                                    " (attempted to connect port " ++ show port ++ ")")
+      findNode ::  [(String, a)] -> LvNodeType -> (LvVI -> [(String, b)])
+                   -> String -> (LvNodeType, Int, Int)
+      findNode entries etype nodeEntries name
+       | isJust $ find (== ':') name =
+            let 
+               [nodeName, portName] = splitOn ":" name
+               node = (must . flip lookup) nodes nodeName
+               findPort (LvWhile subVi)     = must $ findIndex (nodeEntries subVi)
+               findPort (LvFor subVi)       = must $ findIndex (nodeEntries subVi)
+               findPort (LvSequence subVi)  = must $ findIndex (nodeEntries subVi)
+               findPort (LvCase subVis)     = must $ findIndex (nodeEntries (head subVis))
+               findPort (LvFunction _)      = \s -> if null s then 0 else read s
+               findPort _                   = \s -> 0
+            in
+               (LvN, (must . findIndex) nodes nodeName, findPort node portName)
+       | otherwise =
+          case findIndex entries name of
+          Just i -> (etype, i, 0)
+          Nothing -> findNode entries etype nodeEntries (name ++ ":0")
 
 \end{code}
 
@@ -467,7 +466,7 @@ runNode (LvFeedbackNode initVal) state1 inputs _ =
 -- TODO check what happens when both are given
 runNode (LvFor subVi) state1 inputs idx =
    trc "firing for" $
-   runStructure subVi shouldStop state1 idx inputs
+   runStructure subVi initCounter shouldStop state1 idx inputs
    where
       shouldStop st =
          trc (show i' ++ " >= " ++ show n) (i' >= n)
@@ -478,7 +477,7 @@ runNode (LvFor subVi) state1 inputs idx =
 
 runNode (LvWhile subVi) state1 inputs idx =
    trc "firing while" $
-   runStructure subVi shouldStop state1 idx inputs
+   runStructure subVi initCounter shouldStop state1 idx inputs
    where
       shouldStop st =
          not test
@@ -488,11 +487,12 @@ runNode (LvWhile subVi) state1 inputs idx =
 
 runNode (LvSequence vi) state1 inputs idx =
    let
-      nstates = sNodeStates state1
-      nstate = index nstates idx
       shouldStop st = True
+      (state2, pvs) = runStructure vi id shouldStop state1 idx inputs -- TODO fix inputs
+      nstate2 = index (sNodeStates state2) idx
+      nextq = [ (0, LvBool True) | isNothing (nsCont nstate2) ]
    in
-      runStructure vi shouldStop state1 idx inputs -- TODO fix inputs
+      (state2, pvs ++ nextq)
 
 runNode (LvCase vis) state1 inputs idx =
    let
@@ -502,7 +502,7 @@ runNode (LvCase vis) state1 inputs idx =
          Just (LvI32 n) : _  -> (vis !! n)
          _                   -> head vis
       shouldStop st = True
-      (state2, pvs) = runStructure currVi shouldStop state1 idx inputs
+      (state2, pvs) = runStructure currVi id shouldStop state1 idx inputs
       nstate2 = index (sNodeStates state2) idx
    in
       (state2, pvs ++ [(0, LvBool True)])
@@ -511,16 +511,19 @@ runNode (LvCase vis) state1 inputs idx =
 
 \begin{code}
 
-runStructure ::  LvVI -> (LvState -> Bool) -> LvState -> Int
-                  -> [Maybe LvValue] -> (LvState, [(Int, LvValue)])
-runStructure subVi shouldStop state1 idx inputs =
+runStructure ::  LvVI
+                 -> (LvState -> LvState)
+                 -> (LvState -> Bool)
+                 -> LvState -> Int -> [Maybe LvValue]
+                 -> (LvState, [(Int, LvValue)])
+runStructure subVi initState shouldStop state1 idx inputs =
    let
       nstates = sNodeStates state1
       nstate = index nstates idx
 
       statek = 
          case nsCont nstate of
-         Nothing -> initCounter
+         Nothing -> initState
                     $ feedInputsToVI inputs
                     $ initialState (sTs state1 + 1) subVi
          Just (LvKState st) -> st

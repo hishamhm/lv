@@ -57,7 +57,7 @@ local state_grammar = re.compile([[
    nsInputs <- 'nsInputs = ' Seq_Maybe_LvValue
 
    Maybe_LvCont  <- {| 'Nothing' |} / 'Just ' LvCont
-   Maybe_LvValue <- 'Nothing' / 'Just (' LvValue ')'
+   Maybe_LvValue <- { 'Nothing' } / 'Just (' LvValue ')'
 
    LvCont <- 'KFunction(' LvValue_list ')'
            / 'KState[' LvState ']'
@@ -323,9 +323,7 @@ end
 
 local function update_probe(graph, probe, val)
    if not graph.nodes[probe] then
-      print(val)
-      print(probe)
-      print(inspect(graph))
+      return
    end
    local tbl = graph.nodes[probe].attributes
 --   tbl.fillcolor = (tbl.value ~= val) and "yellow" or "white"
@@ -371,12 +369,12 @@ local graph
 local frame = 1
 
 for line in io.stdin:lines() do
-   io.stderr:write(".")
+   os.execute("mkdir -p graph")
    if line:match("^LvState") then
       local state = parse(state_grammar, line)
       adjust_probes(graph, state)
       graph.attributes.label = "ts = "..state.ts
-      write_graph(graph, "graph-"..("%07d"):format(frame)..".dot")
+      write_graph(graph, "graph/graph-"..("%07d"):format(frame)..".dot")
       frame = frame + 1
    elseif line:match("^LvVI") then
       vi = parse(vi_grammar, line)
@@ -387,7 +385,7 @@ for line in io.stdin:lines() do
       --print(inspect(graph))
       graph.attributes.rankdir = "LR"
       graph.attributes.label = "ts = 0"
-      write_graph(graph, "graph-"..("%07d"):format(frame)..".dot")
+      write_graph(graph, "graph/graph-"..("%07d"):format(frame)..".dot")
       frame = frame + 1
    end
 end
