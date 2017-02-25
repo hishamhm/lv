@@ -172,7 +172,7 @@ randomXY =
    makeVI
          [ -- controls
             ("Number of measurements", LvControl (LvI32 10)),
-            ("Delay (sec)", LvControl (LvDBL 2.0))
+            ("Delay (sec)", LvControl (LvDBL 0.5))
          ]
          [ -- indicators
             ("XY graph", LvIndicator (LvCluster [LvArr [], LvArr []]))
