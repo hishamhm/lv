@@ -25,6 +25,12 @@ main =
       loop (initialState 0 program) program
          where program = randomXY --testingWhile
 
+zwire :: String -> String -> LvStringWire
+zwire a b = LvStringWire (a, 0) (b, 0)
+
+nwire :: String -> Int -> String -> Int -> LvStringWire
+nwire a i b j = LvStringWire (a, i) (b, j)
+
 \end{code}
 
 \section{A for-loop}

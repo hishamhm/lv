@@ -48,6 +48,7 @@ import Debug.Trace
 -- Debugging on:
 tsi :: Show a => a -> a
 tsi = traceShowId
+trc :: String -> a -> a
 trc = trace
 
 -- Debugging off:
@@ -163,7 +164,8 @@ data LvNodeAddr = LvNodeAddr LvNodeType Int
 data LvNodeState =  LvNodeState {
                        nsName :: String,
                        nsCont :: Maybe LvCont,
-                       nsInlets :: Seq (Maybe LvValue)
+                       nsInputs :: Seq (Maybe LvValue),
+                       nsData :: [LvValue]
                     }
    deriving Show
 
@@ -194,10 +196,11 @@ instance Show LvNodeAddr where
    show (LvNodeAddr typ nidx) = "{" ++ show typ ++ " " ++ show nidx ++ "}"
 
 instance Show LvCont where
-   show (LvKFunction fn args) = "KFunction(" ++ show args ++ ")"
+   show (LvKFunction _ args) = "KFunction(" ++ show args ++ ")"
    show (LvKState state) = "KState[" ++ show state ++ "]"
 
-indices l = [0 .. ((length l) - 1)]
+indices :: [a] -> [Int]
+indices l = [0 .. (length l - 1)]
 
 \end{code}
 
@@ -207,10 +210,6 @@ indices l = [0 .. ((length l) - 1)]
 
 data LvStringWire = LvStringWire (String, Int) (String, Int)
    deriving Show
-
-zwire a b = LvStringWire (a, 0) (b, 0)
-
-nwire a i b j = LvStringWire (a, i) (b, j)
 
 makeVI ::  [(String, LvControl)] -> [(String, LvIndicator)]
            -> [(String, LvNode)] -> [LvStringWire] -> LvVI
@@ -244,8 +243,15 @@ makeVI controls indicators nodes stringWires =
             checkNode :: Int -> (String, LvNode) -> Maybe (Int, Int)
             checkNode nodeIdx (_, LvWhile nodeVI) = findInVI nodeIdx nodeVI
             checkNode nodeIdx (_, LvFor nodeVI) = findInVI nodeIdx nodeVI
-            checkNode nodeIdx (_, LvSequence [nodeVIs]) = error "TODO" -- TODO
-            checkNode nodeIdx (nodeName, node)
+            checkNode nodeIdx (_, LvSequence [nodeVIs]) =
+               snd $ foldl' findInList (0, Nothing) [nodeVIs]
+               where
+                  findInList (z, Just x) _ = (z, Just x)
+                  findInList (z, Nothing) nodeVi =
+                     case findInVI nodeIdx nodeVi of
+                     Just (_, i) -> (z, Just (nodeIdx, i + z))
+                     Nothing     -> (z + length (nodeEntries nodeVi), Nothing)
+            checkNode nodeIdx (nodeName, _)
                | name == nodeName  = Just (nodeIdx, port)
                | otherwise         = Nothing
          in
@@ -273,17 +279,13 @@ loop state@(LvState _ q _ _ _) program =
 
 \end{code}
 
-% FIXME where should this comment go? :
-% TODO this is implying the ordering given in the description of LvVI,
-% but LabVIEW does not specify it
-
 \begin{code}
 
 run :: LvState -> LvVI -> LvState
 
-run state@(LvState _ [] _ _ _) vi = state
+run state@(LvState _ [] _ _ _) _ = state
 
-run (LvState ts (q@(LvNodeAddr typ idx):qs) nstates cvs ivs) mainVi =
+run (LvState ts (q:qs) nstates cvs ivs) mainVi =
    let
       state0 = LvState (ts + 1) qs nstates cvs ivs
    in
@@ -303,34 +305,36 @@ runThing (LvNodeAddr LvC idx) state0 mainVi =
    where
       cvs = sControlValues state0
 
-runThing q@(LvNodeAddr LvN idx) state0 mainVi =
+runThing (LvNodeAddr LvN idx) state0 mainVi =
    let
       nstates = sNodeStates state0
-      nstate@(LvNodeState _ k values) = index nstates idx
-      clearState = LvNodeState name k (emptyInlets (Seq.length values))
+      nstate = index nstates idx
+      k = nsCont nstate
+      clearState = nstate { nsInputs = clear, nsData = [] }
+                   where clear = emptyInputs $ Seq.length $ nsInputs nstate
       state1 =
          if isNothing k
          then updateNode idx state0 clearState []
          else state0
-      inlets =
+      inputs =
          case k of
-         Nothing -> toList values
-         Just (LvKFunction kfn kargs) -> map Just kargs
-         Just (LvKState st) -> trc "reading inlets from KState!?" $ undefined
-      (name, node) = vNodes mainVi !! idx
-      (state2, pvs) = runNode node state1 inlets idx
+         Nothing -> toList (nsInputs nstate)
+         Just (LvKFunction _ kargs) -> map Just kargs
+         Just (LvKState _) -> trc "reading inputs from KState!?" undefined
+      (_, node) = vNodes mainVi !! idx
+      (state2, pvs) = runNode node state1 inputs idx
    in
       foldl' (\s (p, v) -> fire mainVi v (LvPortAddr LvN idx p) s) state2 pvs
 
--- Produce a sequence of n empty inlets
-emptyInlets :: Int -> Seq (Maybe LvValue)
-emptyInlets n = fromList (replicate n Nothing)
+-- Produce a sequence of n empty inputs
+emptyInputs :: Int -> Seq (Maybe LvValue)
+emptyInputs n = fromList (replicate n Nothing)
 
 updateNode :: Int -> LvState -> LvNodeState -> [LvNodeAddr] -> LvState
 updateNode idx st newNstate newSched =
    st {
-      sTs = (sTs st) + 1,
-      sSched = (sSched st) ++ newSched,
+      sTs = sTs st + 1,
+      sSched = sSched st ++ newSched,
       sNodeStates = update idx newNstate (sNodeStates st)
    }
 
@@ -340,15 +344,16 @@ updateNode idx st newNstate newSched =
 
 fire :: LvVI -> LvValue -> LvPortAddr -> LvState -> LvState
 fire vi value addr state =
-   trc ("firing " ++ show addr ++ " with value " ++ show value ++ "\tvi <" ++ (take 30 $ show vi) ++ ">\tstate " ++ show state) $!
+   trc ("firing " ++ show addr ++ " with value " ++ show value ++ "\tvi <" ++ take 30 (show vi) ++ ">\tstate " ++ show state) $!
    foldl' checkWire state (vWires vi)
       where
-      checkWire state (LvWire src dst) =
+      checkWire s (LvWire src dst) =
          if addr == src
-         then propagate value vi dst state
-         else state
+         then propagate value vi dst s
+         else s
 
-propagate value vi dst@(LvPortAddr LvI dnode dport) state =
+propagate :: LvValue -> LvVI -> LvPortAddr -> LvState -> LvState
+propagate value vi (LvPortAddr LvI dnode _) state =
    let
       (_, indicator) = vIndicators vi !! dnode
       newValue = case indicator of
@@ -358,58 +363,57 @@ propagate value vi dst@(LvPortAddr LvI dnode dport) state =
                  LvTunIndicator LvAutoIndexing -> insertIntoArray (fromMaybe (LvArr []) (index (sIndicatorValues state) dnode)) value []
    in
       state {
-         sTs = ((sTs state) + 1),
+         sTs = sTs state + 1,
          sIndicatorValues = update dnode (Just newValue) (sIndicatorValues state)
       }
 
-propagate value vi dst@(LvPortAddr LvN dnode dport) state =
+propagate value vi (LvPortAddr LvN dnode dport) state =
    state {
-      sTs = ((sTs state) + 1),
+      sTs = sTs state + 1,
       sSched = sched',
       sNodeStates = nstates'
    }
    where
-      sched = sSched state
       nstates = sNodeStates state
-      nstate@(LvNodeState name k inlets) = index nstates dnode
-      inlets' = update dport (Just value) inlets
-      nstate' = LvNodeState name k inlets' -- FIXME continuation
-      nstates' = update dnode nstate' nstates
+      nstate = index nstates dnode
+      inputs' = update dport (Just value) (nsInputs nstate)
+      nstates' = update dnode (nstate { nsInputs = inputs' } ) nstates
       sched' =
          let
+            sched = sSched state
             entry = LvNodeAddr LvN dnode
          in
-            if shouldSchedule (snd $ vNodes vi !! dnode) inlets' && not (entry `elem` sched)
+            if shouldSchedule (snd $ vNodes vi !! dnode) inputs' && entry `notElem` sched
             then sched ++ [entry]
             else sched
 
 shouldSchedule :: LvNode -> Seq (Maybe LvValue) -> Bool
-shouldSchedule node inlets =
+shouldSchedule node inputs =
    case node of
-      LvWhile vi -> shouldScheduleSubVi vi inlets
-      LvFor vi -> shouldScheduleSubVi vi inlets
-      LvSequence vis -> error "TODO" -- TODO
+      LvWhile vi -> shouldScheduleSubVI vi inputs
+      LvFor vi -> shouldScheduleSubVI vi inputs
+      LvSequence vis -> shouldScheduleSubVI (head vis) inputs
       LvFunction name ->
-         elemIndexL Nothing mandatoryInlets == Nothing
+         isNothing $ elemIndexL Nothing mandatoryInputs
          where
-            mandatoryInlets =
-               case mandatoryInputs name of
-               Nothing -> inlets
-               Just n  -> Seq.take n inlets
-      LvFeedbackNode name ->
+            mandatoryInputs =
+               case nrMandatoryInputs name of
+               Nothing -> inputs
+               Just n  -> Seq.take n inputs
+      LvFeedbackNode _ ->
          False
-      otherwise ->
-         elemIndexL Nothing inlets == Nothing
+      _ ->
+         isNothing $ elemIndexL Nothing inputs
 
-shouldScheduleSubVi :: LvVI -> Seq (Maybe LvValue) -> Bool
-shouldScheduleSubVi vi inlets = 
-   find unfilledTunnel (indices $ vControls vi) == Nothing
+shouldScheduleSubVI :: LvVI -> Seq (Maybe LvValue) -> Bool
+shouldScheduleSubVI vi inputs = 
+   isNothing $ find unfilledTunnel (indices $ vControls vi)
       where
          unfilledTunnel cidx = 
             case vControls vi !! cidx of
-               (name, LvTunControl) -> isNothing (index inlets cidx)
-               (name, LvTunSRControl) -> isNothing (index inlets cidx)
-               otherwise -> False
+               (_, LvTunControl) -> isNothing (index inputs cidx)
+               (_, LvTunSRControl) -> isNothing (index inputs cidx)
+               _ -> False
 
 \end{code}
 
@@ -420,22 +424,20 @@ shouldScheduleSubVi vi inlets =
 runNode ::  LvNode -> LvState -> [Maybe LvValue] -> Int
             -> (LvState, [(Int, LvValue)])
 
-runNode (LvSubVI subVi) state1 _ _ = (state1, []) -- TODO initialize state, run subvi
+runNode (LvSubVI _) state1 _ _ = (state1, []) -- TODO initialize state, run subVI
 
-runNode (LvFunction name) state1 inlets idx =
+runNode (LvFunction name) state1 inputs idx =
    let
-      nstates = sNodeStates state1 -- REFACTOR was 0
-      nstate@(LvNodeState _ k _) = index nstates idx
-      q = (LvNodeAddr LvN idx)
-      --values = fromList inlets
+      nstates = sNodeStates state1
+      nstate = index nstates idx
 
       visible :: LvState -> LvVisibleState
       visible state = LvVisibleState (sTs state)
 
       ret =
-         case k of
-         Nothing -> applyFunction (visible state1) name inlets
-         Just kf -> (kFn kf)      (visible state1)      (catMaybes inlets)
+         case nsCont nstate of
+         Nothing -> applyFunction (visible state1) name inputs
+         Just kf -> kFn kf        (visible state1)      (catMaybes inputs)
    in
       trc ("firing function " ++ name) $
       case ret of
@@ -445,10 +447,10 @@ runNode (LvFunction name) state1 inlets idx =
             state2 = updateNode idx state1 nstate{ nsCont = Nothing } []
             pvs = zip (indices outVals) outVals
       LvContinue k' ->
-         (updateNode idx state1 nstate{ nsCont = Just k' } [q], [])
+         (updateNode idx state1 nstate{ nsCont = Just k' } [LvNodeAddr LvN idx], [])
 
 runNode (LvConstant value) state1 _ _ =
-   trc ("firing constant " ++ show value) $
+   trc ("firing constant " ++ show value)
    (state1, [(0, value)])
 
 \end{code}
@@ -459,8 +461,8 @@ is implied.
 
 \begin{code}
 
-runNode (LvFeedbackNode initVal) state1 inlets _ =
-   (state1, [(0, fromMaybe initVal (inlets !! 0) )])
+runNode (LvFeedbackNode initVal) state1 inputs _ =
+   (state1, [(0, fromMaybe initVal (head inputs) )])
 
 \end{code}
 
@@ -468,20 +470,20 @@ runNode (LvFeedbackNode initVal) state1 inlets _ =
 
 -- TODO for when no N is set and an array is given as input tunnel
 -- TODO check what happens when both are given
-runNode (LvFor subVi) state1 inlets idx =
-   trc ("firing for") $
-   loopStructure subVi shouldStop state1 idx inlets
+runNode (LvFor subVi) state1 inputs idx =
+   trc "firing for" $
+   loopStructure subVi shouldStop state1 idx inputs
    where
       shouldStop st =
-         trc (show i' ++ " >= " ++ show n) $ (i' >= n)
+         trc (show i' ++ " >= " ++ show n) (i' >= n)
          where
             (LvI32 i) = getControl st iIndex (LvI32 0)
             i' = i + 1
             LvI32 n = coerceToInt $ getControl st nIndex (LvI32 0)
 
-runNode (LvWhile subVi) state1 inlets idx =
-   trc ("firing while") $
-   loopStructure subVi shouldStop state1 idx inlets
+runNode (LvWhile subVi) state1 inputs idx =
+   trc "firing while" $
+   loopStructure subVi shouldStop state1 idx inputs
    where
       shouldStop st =
          not test
@@ -489,44 +491,55 @@ runNode (LvWhile subVi) state1 inlets idx =
             (LvBool test) = getIndicator st testIndex
                             (error "test boolean in 'while' must be set")
 
+runNode (LvSequence subVis) state1 inputs idx =
+   let
+      nstates = sNodeStates state1
+      nstate = index nstates idx
+      currVi =
+         case nsData nstate of
+         []         -> head subVis
+         [LvI32 n]  -> (subVis !! n)
+         
+      shouldStop _ =
+         True -- TODO FINISH
+   in
+      loopStructure currVi shouldStop state1 idx inputs -- TODO fix inputs
+
 \end{code}
 
 \begin{code}
 
 loopStructure ::  LvVI -> (LvState -> Bool) -> LvState -> Int
                   -> [Maybe LvValue] -> (LvState, [(Int, LvValue)])
-loopStructure loopVi shouldStop state1 idx inlets =
+loopStructure loopVi shouldStop state1 idx inputs =
    let
       nstates = sNodeStates state1
-      nstate@(LvNodeState name k values) = index nstates idx
-      q = (LvNodeAddr LvN idx)
+      nstate = index nstates idx
 
       statek = 
-         case k of
+         case nsCont nstate of
          Nothing -> initCounter
-                    $ feedInletsToVi inlets
-                    $ initialState ((sTs state1) + 1) loopVi
+                    $ feedInputsToVI inputs
+                    $ initialState (sTs state1 + 1) loopVi
          Just (LvKState st) -> st
       statek'@(LvState _ qk _ _ _) = run statek loopVi
-      nextk =
-         if not $ null qk
-         then Just (LvKState statek')
-         else
-            if shouldStop statek'
-            then Nothing
-            else trc ("let's go " ++ show (i + 1)) $
-               trc ("before: " ++ show statek') $
-               Just (LvKState (nextStep loopVi statek' (i + 1)))
-               where (LvI32 i) = getControl statek' iIndex (LvI32 999)
-      nstate' = (LvNodeState name nextk values)
-      thisq = if isJust nextk then [q] else []
+      nextk
+         | not $ null qk      = Just (LvKState statek')
+         | shouldStop statek' = Nothing
+         | otherwise =
+              trc ("let's go " ++ show (i + 1)) $
+              trc ("before: " ++ show statek') $
+              Just (LvKState (nextStep loopVi statek' (i + 1)))
+         where (LvI32 i) = getControl statek' iIndex (LvI32 999)
+      nstate' = nstate { nsCont = nextk }
+      qMe = [LvNodeAddr LvN idx | isJust nextk]
       state2 = state1 {
-         sTs = (sTs statek') + 1,
-         sSched = (sSched state1) ++ thisq,
+         sTs = sTs statek' + 1,
+         sSched = sSched state1 ++ qMe,
          sNodeStates = update idx nstate' nstates
       }
       pvs = map (\(p,v) -> (p, fromMaybe undefined v))
-          $ filter (\(p,v) -> isJust v)
+          $ filter (\(_,v) -> isJust v)
           $ zip (indices $ vIndicators loopVi) (toList $ sIndicatorValues statek') 
    in
       if isJust nextk 
@@ -544,34 +557,41 @@ list of wires.
 
 \begin{code}
 
-numberOfInputs :: Int -> LvVI -> Int
-numberOfInputs idx vi =
+nrConnectedInputs :: Int -> LvVI -> Int
+nrConnectedInputs idx vi =
    1 + foldl' maxInput (-1) (vWires vi)
    where
       maxInput :: Int -> LvWire -> Int
-      maxInput mx w@(LvWire _ (LvPortAddr LvN i n)) | i == idx = max mx n
+      maxInput mx (LvWire _ (LvPortAddr LvN i n)) | i == idx = max mx n
       maxInput mx _ = mx
+
+\end{code}
+
+\begin{code}
 
 initialState :: Int -> LvVI -> LvState
 initialState ts vi = 
    LvState {
       sTs               = ts + 1,
       sSched            = initialSchedule vi,
-      sNodeStates       = fromList $ mapIdx (makeNodeState)          (vNodes vi),
+      sNodeStates       = fromList $ mapIdx makeNodeState            (vNodes vi),
       sControlValues    = fromList $ map (makeControlValue . snd)    (vControls vi),
       sIndicatorValues  = fromList $ map (makeIndicatorValue . snd)  (vIndicators vi)
    }
    where
       makeNodeState :: (Int, (String, LvNode)) -> LvNodeState
       makeNodeState (i, (name, node)) = LvNodeState  name Nothing
-                                                     (emptyInlets $ nInlets i node)
-      nInlets _ (LvSubVI vi)        = length $ vControls vi
-      nInlets i (LvFunction _)      = numberOfInputs i vi
-      nInlets _ (LvConstant v)      = 0
-      nInlets _ (LvFor vi)          = length $ vControls vi
-      nInlets _ (LvWhile vi)        = length $ vControls vi
-      nInlets _ (LvSequence vi)     = error "TODO" -- TODO
-      nInlets _ (LvFeedbackNode v)  = 1
+                                                     (emptyInputs $ nrInputs i node) []
+
+      nrInputs :: Int -> LvNode -> Int
+      nrInputs _ (LvSubVI subVI)      = length $ vControls subVI
+      nrInputs i (LvFunction _)       = nrConnectedInputs i vi
+      nrInputs _ (LvConstant _)       = 0
+      nrInputs _ (LvFor subVI)        = length $ vControls subVI
+      nrInputs _ (LvWhile subVI)      = length $ vControls subVI
+      nrInputs _ (LvSequence subVIs)  = sum $ map (length . vControls) subVIs
+      nrInputs _ (LvFeedbackNode _)   = 1
+
       makeControlValue :: LvControl -> Maybe LvValue
       makeControlValue (LvControl    v)  = Just v
       makeControlValue (LvSRControl  v)  = Just v
@@ -581,43 +601,52 @@ initialState ts vi =
       makeIndicatorValue _                = Nothing
       
       mapIdx :: ((Int, a) -> b) -> [a] -> [b]
-      mapIdx fn l = map fn $ zip (indices l) l
+      mapIdx fn l = zipWith (curry fn) (indices l) l
+
+\end{code}
+
+Note that the code below implies the initial schedule follows the order of
+node given in the description of LvVI, but LabVIEW does not specify it.
+
+\begin{code}
 
 -- FIXME schedule while loop
 initialSchedule :: LvVI -> [LvNodeAddr]
 initialSchedule vi = 
-   (map (LvNodeAddr LvC) (indices $ vControls vi))
-   ++ (map (LvNodeAddr LvN) $ filter  (\i -> isBootNode i (vNodes vi !! i))
-                                      (indices $ vNodes vi))
+   map (LvNodeAddr LvC) (indices $ vControls vi)
+   ++ map (LvNodeAddr LvN) (filter  (\i -> isBootNode i (vNodes vi !! i))
+                                    (indices $ vNodes vi))
    where
-      isBootNode _ (_, (LvConstant _)) = True
-      isBootNode _ (_, (LvFeedbackNode _)) = True
-      isBootNode i (_, (LvFunction _)) | numberOfInputs i vi == 0 = True
+      isBootNode _ (_, LvConstant _) = True
+      isBootNode _ (_, LvFeedbackNode _) = True
+      isBootNode i (_, LvFunction _) | nrConnectedInputs i vi == 0 = True
       isBootNode _ _ = False
 
-feedInletsToVi :: [Maybe LvValue] -> LvState -> LvState
-feedInletsToVi inlets state =
+feedInputsToVI :: [Maybe LvValue] -> LvState -> LvState
+feedInputsToVI inputs state =
    state {
-      sTs = (sTs state) + 1,
-      sControlValues = fromList $ map (uncurry orElse)
-                                $ zip inlets (toList (sControlValues state))
-   }      
+      sTs = sTs state + 1,
+      sControlValues = fromList $ zipWith orElse inputs (toList (sControlValues state))
+   }  
 
+iIndex :: Int
 iIndex = 0 -- counter control for both 'for' and 'while'
+nIndex :: Int
 nIndex = 1 -- limit control for 'for'
+testIndex :: Int
 testIndex = 0 -- test indicator for 'while'
 
 initCounter :: LvState -> LvState
 initCounter state =
    state {
-      sTs = (sTs state) + 1,
+      sTs = sTs state + 1,
       sControlValues = update iIndex (Just $ LvI32 0) (sControlValues state)
    }
 
 nextStep :: LvVI -> LvState -> Int -> LvState
 nextStep vi state i' =
    state {
-      sTs = (sTs state) + 1,
+      sTs = sTs state + 1,
       sSched = initialSchedule vi,
       sControlValues = cvs''
    }
@@ -628,13 +657,13 @@ nextStep vi state i' =
               $ zip (vIndicators vi) (toList (sIndicatorValues state))
       shiftRegister ::  Seq (Maybe LvValue) -> ((String, LvIndicator), Maybe LvValue)
                         -> Seq (Maybe LvValue)
-      shiftRegister cvs ((name, (LvSRIndicator cidx)), ival) = 
-         update cidx (ival `orElse` (index cvs cidx)) cvs
+      shiftRegister cvs ((_, LvSRIndicator cidx), ival) = 
+         update cidx (ival `orElse` index cvs cidx) cvs
       shiftRegister cvs _ = cvs
 
 coerceToInt :: LvValue -> LvValue
 coerceToInt v@(LvI32 _) = v
-coerceToInt v@(LvDBL d) = LvI32 (floor d)
+coerceToInt (LvDBL d) = LvI32 (floor d)
 
 getControl :: LvState -> Int -> LvValue -> LvValue
 getControl st idx def = fromMaybe def $ index (sControlValues st) idx
@@ -648,6 +677,7 @@ getIndicator st idx def = fromMaybe def $ index (sIndicatorValues st) idx
 
 \begin{code}
 
+isOp :: String -> Bool
 isOp f = f `elem` ["+", "-", "*", "/", ">", "<"]
 
 applyFunction :: LvVisibleState -> String -> [Maybe LvValue] -> LvReturn
@@ -661,9 +691,9 @@ applyFunction _ "ArrayMax&Min" [Just (LvArr a)] =
         where
            (maxVal, maxIdx) = foldPair (>) a
            (minVal, minIdx) = foldPair (<) a
-           foldPair op l = foldl1 (\(a,i) (b,j) -> if op a b
-                                                   then (a,i)
-                                                   else (b,j))
+           foldPair op l = foldl1 (\(x,i) (y,j) -> if op x y
+                                                   then (x,i)
+                                                   else (y,j))
                                   (zip l (indices l))
 
 \end{code}
@@ -680,12 +710,12 @@ applyFunction _ "InsertIntoArray" (Just arr : Just vs : idxs) =
 applyFunction _ "Bundle" args = 
    LvReturn [LvCluster (catMaybes args)]
 
-applyFunction vst@(LvVisibleState ts) "WaitUntilNextMs" [Just (LvI32 ms)] =
+applyFunction (LvVisibleState ts) "WaitUntilNextMs" [Just (LvI32 ms)] =
    LvContinue $ LvKFunction waitUntil [LvI32 nextMs]
    where
       nextMs = ts - (ts `mod` ms) + ms
-      waitUntil vst@(LvVisibleState ts) arg@[LvI32 nextMs]
-         | ts >= nextMs = LvReturn []
+      waitUntil (LvVisibleState now) arg@[LvI32 stop]
+         | now >= stop  = LvReturn []
          | otherwise    = LvContinue $ LvKFunction waitUntil arg
 
 applyFunction vst "WaitUntilNextMs" [Just (LvDBL msd)] =
@@ -702,25 +732,30 @@ applyFunction _ fn args =
    error ("No rule to apply " ++ fn ++ " " ++ show args)
 
 ndims :: LvValue -> Int
-ndims (LvArr (v:vs)) = 1 + ndims v
+ndims (LvArr (v:_))  = 1 + ndims v
 ndims (LvArr [])     = 1
 ndims _              = 0
 
+eqDim :: LvValue -> LvValue -> Bool
 eqDim a b = ndims a == ndims b
+neDim :: LvValue -> LvValue -> Bool
 neDim a b = ndims a == ndims b + 1
 
 zero :: LvValue -> LvValue
-zero (LvArr l@(x : xs)) = LvArr (replicate (length l) (zero x))
-zero (LvDBL _)          = LvDBL 0.0
-zero (LvI32 _)          = LvI32 0
-zero (LvSTR _)          = LvSTR ""
+zero (LvArr l@(x:_))  = LvArr (replicate (length l) (zero x))
+zero (LvDBL _)        = LvDBL 0.0
+zero (LvI32 _)        = LvI32 0
+zero (LvSTR _)        = LvSTR ""
+zero (LvBool _)       = LvBool False
+zero (LvCluster c)    = LvCluster (map zero c)
+zero (LvArr [])       = LvArr []
 
 resizeCurr :: (LvValue -> LvValue) -> [LvValue] -> [LvValue] -> [LvValue]
 resizeCurr childOp xs@(x:_) ys = map childOp $ take (length xs) $ ys ++ (repeat . zero) x
 
 childResizer :: LvValue -> (LvValue -> LvValue)
 childResizer (LvArr x) = \(LvArr a) -> LvArr (resizeAll x a)
-childResizer (LvI32 _) = id
+childResizer _ = id
 
 resizeAll :: [LvValue] -> [LvValue] -> [LvValue]
 resizeAll xs@(x:_) ys = resizeCurr (childResizer x) xs ys
@@ -728,7 +763,10 @@ resizeAll xs@(x:_) ys = resizeCurr (childResizer x) xs ys
 resizeLower :: [LvValue] -> [LvValue] -> [LvValue]
 resizeLower (x:_) ys = map (childResizer x) ys
 
-insertAt  i  lx ly = LvArr $ (take i lx) ++ ly ++ (drop i lx)
+insertAt :: Int -> [LvValue] -> [LvValue] -> LvValue
+insertAt i lx ly = LvArr $ take i lx ++ ly ++ drop i lx
+
+recurseTo :: [Int] -> [LvValue] -> [LvValue] -> LvValue
 recurseTo is lx ly = LvArr $ zipWith (\a b -> insertIntoArray a b is) lx ly
 
 \end{code}
@@ -746,22 +784,23 @@ base type).
 
 \begin{code}
 
+insertIntoArray :: LvValue -> LvValue -> [Int] -> LvValue
 insertIntoArray vx vy idxs =
    case (vx, vy, idxs) of
-   (LvArr lx, vy, []) -> insertIntoArray vx vy [length lx]
-   (LvArr lx@(LvArr x:_),  LvArr ly,  (-1 : is))  -> recurseTo  is  lx (next x lx ly)
-   (LvArr lx@(LvArr x:_),  LvArr ly,  (i  : _ ))  -> insertAt   i   lx (curr x lx ly)
-   (LvArr lx,              _,         (i  : _ ))  -> insertAt   i   lx (base vy)
+   (LvArr lx, _, []) -> insertIntoArray vx vy [length lx]
+   (LvArr lx@(LvArr x:_),  LvArr ly,  -1 : is)  -> recurseTo  is  lx (next x lx ly)
+   (LvArr lx@(LvArr x:_),  LvArr ly,  i  : _ )  -> insertAt   i   lx (curr x lx ly)
+   (LvArr lx,              _,         i  : _ )  -> insertAt   i   lx (base vy)
    _ -> error ("WHAT " ++ show vx ++ " " ++ show vy ++ " " ++ show idxs)
    where
       (next, curr, base) =
          if ndims vx == ndims vy
-         then (  \x lx ly     -> resizeCurr id lx ly,
-                 \x lx ly     -> resizeLower lx ly,
+         then (  \_ lx ly     -> resizeCurr id lx ly,
+                 \_ lx ly     -> resizeLower lx ly,
                  \(LvArr ly)  -> ly)
-         else (  \x lx ly     -> resizeCurr id x ly,
-                 \x lx ly     -> [LvArr (resizeAll x ly)],
-                 \vy          -> [vy])
+         else (  \x _  ly     -> resizeCurr id x ly,
+                 \x _  ly     -> [LvArr (resizeAll x ly)],
+                 \_           -> [vy])
 
 \end{code}
 
@@ -770,18 +809,26 @@ coercion rules through the auxiliary function |binOp|.
 
 \begin{code}
 
+binOp :: (Double -> Double -> t) -> (t -> LvValue)
+         -> (Int -> Int -> t1) -> (t1 -> LvValue)
+         -> [Maybe LvValue] -> LvReturn
 binOp opD typD _ _  [Just (LvDBL a),  Just (LvDBL b)]  = LvReturn [typD (opD a b)]
 binOp opD typD _ _  [Just (LvI32 a),  Just (LvDBL b)]  = LvReturn [typD (opD (fromIntegral a) b)]
 binOp opD typD _ _  [Just (LvDBL a),  Just (LvI32 b)]  = LvReturn [typD (opD a (fromIntegral b))]
 binOp _ _ opI typI  [Just (LvI32 a),  Just (LvI32 b)]  = LvReturn [typI (opI a b)]
-binOp _ _ opI typI  _                                  = undefined
+binOp _ _ _   _     _                                  = undefined
 
+numOp :: (Double -> Double -> Double)
+         -> (Int -> Int -> Int) -> [Maybe LvValue] -> LvReturn
 numOp opD opI = binOp opD LvDBL opI LvI32
 
+boolOp :: (Double -> Double -> Bool)
+          -> (Int -> Int -> Bool) -> [Maybe LvValue] -> LvReturn
 boolOp opD opI = binOp opD LvBool opI LvBool
 
-mandatoryInputs "InsertIntoArray" = Just 2
-mandatoryInputs _ = Nothing
+nrMandatoryInputs :: String -> Maybe Int
+nrMandatoryInputs "InsertIntoArray" = Just 2
+nrMandatoryInputs _ = Nothing
 
 \end{code}
 
