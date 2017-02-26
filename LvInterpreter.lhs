@@ -1,3 +1,6 @@
+\begin{code}
+{-# LANGUAGE BangPatterns #-}
+\end{code}
 \documentclass[a4paper]{article}
 %\setlength{\parskip}{\baselineskip}
 \usepackage[margin=3cm]{geometry}
@@ -265,7 +268,7 @@ makeVI controls indicators nodes stringWires =
 loop :: LvState -> LvVI -> IO ()
 loop state@(LvState _ q _ _ _) program =
    do
-      print state
+      print (">>> " ++ show state)
       case q of
        []  -> return ()
        _   -> loop (run state program) program 
@@ -310,13 +313,15 @@ runThing (LvNodeAddr LvN idx) state0 mainVi =
          then updateNode idx state0 clearState []
          else state0
       inputs =
+         trc ("CHECK INPUTS (LVN, " ++ show idx ++ ") ON STATE " ++ show state0 ++ " FOR VI " ++ show mainVi ++ " WITH K " ++ show k) $
          case k of
          Nothing -> toList (nsInputs nstate)
          Just (LvKFunction _ kargs) -> map Just kargs
-         Just (LvKState _) -> trc "reading inputs from KState!?" undefined
+         Just (LvKState _) -> undefined
       (_, node) = vNodes mainVi !! idx
       (state2, pvs) = runNode node state1 inputs idx
    in
+      trace ("RUNTHING (LVN, " ++ show idx ++ ") ON STATE " ++ show state0 ++ " FOR VI " ++ show mainVi) $
       foldl' (\s (p, v) -> fire mainVi v (LvPortAddr LvN idx p) s) state2 pvs
 
 -- Produce a sequence of n empty inputs
@@ -496,16 +501,21 @@ runNode (LvSequence vi) state1 inputs idx =
 
 runNode (LvCase vis) state1 inputs idx =
    let
-      nstate1 = index (sNodeStates state1) idx
-      currVi =
-         case inputs of
-         Just (LvI32 n) : _  -> (vis !! n)
-         _                   -> head vis
+      nstate = index (sNodeStates state1) idx
+      currVi :: LvVI
+      currVi = vis !! n
+               where
+                  n = case nsCont nstate of
+                      Nothing ->
+                         case inputs of
+                         Just (LvI32 i) : _  -> i
+                         _                   -> 0
+                      Just _   -> (\(LvI32 i) -> i) $ fromMaybe undefined
+                                                    $ index (nsInputs nstate) 0
+
       shouldStop st = True
-      (state2, pvs) = runStructure currVi id shouldStop state1 idx inputs
-      nstate2 = index (sNodeStates state2) idx
    in
-      (state2, pvs ++ [(0, LvBool True)])
+      runStructure currVi id shouldStop state1 idx inputs
 
 \end{code}
 
@@ -529,23 +539,23 @@ runStructure subVi initState shouldStop state1 idx inputs =
          Just (LvKState st) -> st
       statek'@(LvState _ qk _ _ _) = run statek subVi
       nextk
-         | not $ null qk      = Just (LvKState statek')
+         | not $ null qk      = trace ("GOT QK " ++ show qk ++ " IN STATEK " ++ show statek) $ Just (LvKState statek')
          | shouldStop statek' = Nothing
          | otherwise =
               trc ("let's go " ++ show (i + 1)) $
               trc ("before: " ++ show statek') $
               Just (LvKState (nextStep subVi statek' (i + 1)))
-         where (LvI32 i) = getControl statek' iIndex (LvI32 999)
+         where (LvI32 i) = getControl statek' iIndex undefined
       nstate' = nstate { nsCont = nextk }
-      qMe = [LvNodeAddr LvN idx | isJust nextk]
+      qMe = trace ("QUEUED MYSELF? " ++ (show $ isJust nextk) ++ "(LvN " ++ show idx ++ ")") $ [LvNodeAddr LvN idx | isJust nextk]
       state2 = state1 {
          sTs = sTs statek' + 1,
          sSched = sSched state1 ++ qMe,
          sNodeStates = update idx nstate' nstates
       }
       pvs = map (\(p,v) -> (p, fromMaybe undefined v))
-          $ filter (\(_,v) -> isJust v)
-          $ zip (indices $ vIndicators subVi) (toList $ sIndicatorValues statek')
+            $ filter (\(_,v) -> isJust v)
+            $ zip (indices $ vIndicators subVi) (toList $ sIndicatorValues statek')
    in
       if isJust nextk 
       then (state2, [])

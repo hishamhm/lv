@@ -23,7 +23,7 @@ main =
    do
       print program
       loop (initialState 0 program) program
-         where program = testingSeq
+         where program = testingCase
 
 wire :: String -> String -> LvStringWire
 wire a b = LvStringWire a b
@@ -308,6 +308,138 @@ stepN =
       [ -- wires
          wire "count" "For:N",
          wire "For:out" "out"
+      ]
+
+\end{code}
+
+\section{An example with cases}
+
+\begin{code}
+
+testingCase =
+   makeVI
+      [ -- controls
+      ]
+      [ -- indicators
+      ]
+      [ -- nodes
+         ("3", LvConstant (LvI32 3)),
+         ("for", LvFor (makeVI
+            [ -- controls
+               ("i", LvAutoControl),
+               ("N", LvTunControl)
+            ]
+            [ -- indicators
+               ("out", LvTunIndicator LvAutoIndexing)
+            ]
+            [ -- nodes
+               ("case", LvCase [
+                  (makeVI
+                     [ -- controls
+                        ("case", LvControl (LvI32 0)),
+                        ("in",   LvControl (LvI32 0))
+                     ]
+                     [ -- indicators
+                        ("out", LvIndicator (LvI32 0))
+                     ]
+                     [ -- nodes
+                        ("+", LvFunction "+"),
+                        ("10", LvConstant (LvI32 10))
+                     ]
+                     [ -- wires
+                        wire "in" "+:0",
+                        wire "10" "+:1",
+                        wire "+" "out"
+                     ]
+                  ),
+                  (makeVI
+                     [ -- controls
+                        ("case", LvControl (LvI32 0)),
+                        ("in",   LvControl (LvI32 0))
+                     ]
+                     [ -- indicators
+                        ("out", LvIndicator (LvI32 0))
+                     ]
+                     [ -- nodes
+                        ("-", LvFunction "-"),
+                        ("10", LvConstant (LvI32 10))
+                     ]
+                     [ -- wires
+                        wire "in" "-:0",
+                        wire "10" "-:1",
+                        wire "-" "out"
+                     ]
+                  ),
+                  (makeVI
+                     [
+                        ("case", LvControl (LvI32 0)),
+                        ("in",   LvControl (LvI32 0))
+                     ]
+                     [ -- indicators
+                        ("out", LvIndicator (LvI32 0))
+                     ]
+                     [ -- nodes
+                        ("*", LvFunction "*"),
+                        ("10", LvConstant (LvI32 10))
+                     ]
+                     [ -- wires
+                        wire "in" "*:0",
+                        wire "10" "*:1",
+                        wire "*" "out"
+                     ]
+                  )
+               ])
+            ]
+            [ -- wires
+               wire "i"        "case:case",
+               wire "case:out" "out"
+            ]
+         ))
+      ]
+      [ -- wires
+         wire "3" "for:N"
+      ]
+
+
+testingNestedFor =
+   makeVI
+      [ -- controls
+      ]
+      [ -- indicators
+      ]
+      [ -- nodes
+         ("outer 3", LvConstant (LvI32 3)),
+         ("outer for", LvFor (makeVI
+            [ -- controls
+               ("i", LvAutoControl),
+               ("N", LvTunControl)
+            ]
+            [ -- indicators
+               ("out", LvTunIndicator LvAutoIndexing)
+            ]
+            [ -- nodes
+               ("inner 3", LvConstant (LvI32 3)),
+               ("inner for", LvFor (makeVI
+                  [ -- controls
+                     ("i", LvAutoControl),
+                     ("N", LvTunControl)
+                  ]
+                  [ -- indicators
+                     ("out", LvTunIndicator LvAutoIndexing)
+                  ]
+                  [ -- nodes
+                  ]
+                  [ -- wires
+                  ]
+               ))
+            ]
+            [ -- wires
+               wire "inner 3"        "inner for:N"
+            ]
+         ))
+      ]
+      [ -- wires
+         wire "outer 3" "outer for:N"
       ]
 
 \end{code}

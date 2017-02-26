@@ -15,7 +15,7 @@ LvInterpreter.tex: LvInterpreter.lhs Lv_format.lhs
 
 DemoLvInterpreter: DemoLvInterpreter.lhs LvInterpreter.lhs
 	rm -f LvInterpreter.o LvInterpreter.hi DemoLvInterpreter.o DemoLvInterpreter.hi
-	ghc -o DemoLvInterpreter -cpp DemoLvInterpreter.lhs
+	ghc -o DemoLvInterpreter DemoLvInterpreter.lhs
 
 lv: lv.hs
 	ghc -o lv lv.hs
