@@ -321,6 +321,7 @@ testingCase =
       [ -- controls
       ]
       [ -- indicators
+         ("result", LvIndicator (LvArr []))
       ]
       [ -- nodes
          ("3", LvConstant (LvI32 3)),
@@ -397,7 +398,8 @@ testingCase =
          ))
       ]
       [ -- wires
-         wire "3" "for:N"
+         wire "3" "for:N",
+         wire "for:out" "result"
       ]
 
 

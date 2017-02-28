@@ -106,7 +106,10 @@ local vi_grammar = re.compile([[
            / {:type: 'LvWhile'        :} ' '  sub_vi
            / {:type: 'LvFor'          :} ' '  sub_vi
            / {:type: 'LvSequence'     :} ' '  sub_vi
+           / {:type: 'LvCase'         :} ' '  {:vis:   LvVI_list   :}
            / {:type: 'LvFeedbackNode' :} ' (' {:value: LvValue     :} ')'
+
+   LvValue_list <- '[' {| (LvVI (',' LvVI)* )? |} ']'
    
    sub_vi <- {:vi: '(' LvVI ')' :}
 
@@ -123,8 +126,8 @@ local function parse(grammar, line)
    local object, err, max = grammar:match(line)
    if not object then
       print(object, err, max)
+      print("FAILED PARSING: Is grammar out of date?")
       os.exit(1)
---      print("Error at " .. line:sub(err))
       return nil
    end
    --print(inspect(object))
@@ -194,6 +197,13 @@ local function vi_to_graph(vi, graph_name, attributes)
       elseif node.type == "LvWhile" or node.type == "LvFor" or node.type == "LvSequence" then
          graph.subgraphs[name] = vi_to_graph(node.vi, name, {label = node.type, shape = "Msquare"} )
          graph.nindex[i-1] = graph.subgraphs[name]
+      elseif node.type == "LvCase" then
+         for c, subvi in ipairs(node.vis) do
+            -- TODO fix presentation of graph
+            local subname = name .. "_case_" .. tostring(c)
+            graph.subgraphs[subname] = vi_to_graph(subvi, name, {label = node.type, shape = "Msquare"} )
+            graph.nindex[i-1] = graph.subgraphs[subname]
+         end
       elseif node.type == "LvFunction" then
          name = "Function_" .. name
          graph.nodes[name] = { name = name, attributes = { shape = "none", margin="0", label = label_for_function(node.fname) } }
@@ -368,14 +378,14 @@ local vi
 local graph
 local frame = 1
 
-for line in io.stdin:lines() do
-   os.execute("mkdir -p graph")
+local function process_line(line)
    if line:match("^LvState") then
       local state = parse(state_grammar, line)
       adjust_probes(graph, state)
       graph.attributes.label = "ts = "..state.ts
       write_graph(graph, "graph/graph-"..("%07d"):format(frame)..".dot")
       frame = frame + 1
+      return true
    elseif line:match("^LvVI") then
       vi = parse(vi_grammar, line)
       if not vi then
@@ -387,5 +397,18 @@ for line in io.stdin:lines() do
       graph.attributes.label = "ts = 0"
       write_graph(graph, "graph/graph-"..("%07d"):format(frame)..".dot")
       frame = frame + 1
+      return true
    end
+end
+
+local last_line
+for line in io.stdin:lines() do
+   os.execute("mkdir -p graph")
+   if process_line(line) then
+      last_line = line
+   end
+end
+
+for _ = 1, 10 do
+   process_line(last_line)
 end

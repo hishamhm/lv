@@ -35,6 +35,7 @@ module LvInterpreter where
 
 import Data.Sequence (Seq, fromList, index, update, mapWithIndex, fromList, elemIndexL)
 import qualified Data.Sequence as Seq (length, take)
+import Data.Char
 import Data.List
 import Data.List.Split
 import Data.Maybe
@@ -54,6 +55,8 @@ tsi :: Show a => a -> a
 tsi = traceShowId
 trc :: String -> a -> a
 trc = trace
+
+shw x = (chr 27 : "[1;33m") ++ show x ++ (chr 27 : "[0m")
 
 -- Debugging off:
 --tsi = id
@@ -268,7 +271,7 @@ makeVI controls indicators nodes stringWires =
 loop :: LvState -> LvVI -> IO ()
 loop state@(LvState _ q _ _ _) program =
    do
-      print (">>> " ++ show state)
+      print state
       case q of
        []  -> return ()
        _   -> loop (run state program) program 
@@ -313,7 +316,7 @@ runThing (LvNodeAddr LvN idx) state0 mainVi =
          then updateNode idx state0 clearState []
          else state0
       inputs =
-         trc ("CHECK INPUTS (LVN, " ++ show idx ++ ") ON STATE " ++ show state0 ++ " FOR VI " ++ show mainVi ++ " WITH K " ++ show k) $
+         trc ("CHECK INPUTS (LVN, " ++ shw idx ++ ") ON STATE " ++ shw state0 ++ " FOR VI " ++ shw mainVi ++ " WITH K " ++ shw k) $
          case k of
          Nothing -> toList (nsInputs nstate)
          Just (LvKFunction _ kargs) -> map Just kargs
@@ -321,7 +324,7 @@ runThing (LvNodeAddr LvN idx) state0 mainVi =
       (_, node) = vNodes mainVi !! idx
       (state2, pvs) = runNode node state1 inputs idx
    in
-      trace ("RUNTHING (LVN, " ++ show idx ++ ") ON STATE " ++ show state0 ++ " FOR VI " ++ show mainVi) $
+      trace ("RUNTHING (LVN, " ++ shw idx ++ ") ON STATE " ++ shw state0 ++ " FOR VI " ++ shw mainVi) $
       foldl' (\s (p, v) -> fire mainVi v (LvPortAddr LvN idx p) s) state2 pvs
 
 -- Produce a sequence of n empty inputs
@@ -342,7 +345,7 @@ updateNode idx st newNstate newSched =
 
 fire :: LvVI -> LvValue -> LvPortAddr -> LvState -> LvState
 fire vi value addr state =
-   trc ("firing " ++ show addr ++ " with value " ++ show value ++ "\tvi <" ++ take 30 (show vi) ++ ">\tstate " ++ show state) $!
+   trc ("firing " ++ shw addr ++ " with value " ++ shw value ++ "\tvi <" ++ shw (take 30 (show vi)) ++ ">\tstate " ++ shw state) $!
    foldl' checkWire state (vWires vi)
       where
       checkWire s (LvWire src dst) =
@@ -449,7 +452,7 @@ runNode (LvFunction name) state1 inputs idx =
          (updateNode idx state1 nstate{ nsCont = Just k' } [LvNodeAddr LvN idx], [])
 
 runNode (LvConstant value) state1 _ _ =
-   trc ("firing constant " ++ show value)
+   trc ("firing constant " ++ shw value)
    (state1, [(0, value)])
 
 \end{code}
@@ -474,7 +477,7 @@ runNode (LvFor subVi) state1 inputs idx =
    runStructure subVi initCounter shouldStop state1 idx inputs
    where
       shouldStop st =
-         trc (show i' ++ " >= " ++ show n) (i' >= n)
+         trc (shw i' ++ " >= " ++ shw n) (i' >= n)
          where
             (LvI32 i) = getControl st iIndex (LvI32 0)
             i' = i + 1
@@ -501,21 +504,29 @@ runNode (LvSequence vi) state1 inputs idx =
 
 runNode (LvCase vis) state1 inputs idx =
    let
-      nstate = index (sNodeStates state1) idx
-      currVi :: LvVI
-      currVi = vis !! n
-               where
-                  n = case nsCont nstate of
-                      Nothing ->
-                         case inputs of
-                         Just (LvI32 i) : _  -> i
-                         _                   -> 0
-                      Just _   -> (\(LvI32 i) -> i) $ fromMaybe undefined
-                                                    $ index (nsInputs nstate) 0
-
+      nstate1 = index (sNodeStates state1) idx
+      n = case nsCont nstate1 of
+             Nothing ->
+                case inputs of
+                Just (LvI32 i) : _  -> i
+                _                   -> 0
+             Just _ ->
+                (\(LvI32 i) -> i) $
+                fromMaybe (error "no input 0!?") $ index (nsInputs nstate1) 0
       shouldStop st = True
+      (state2, pvs) = runStructure (vis !! n) id shouldStop state1 idx inputs
+      state3 =
+         case nsCont nstate1 of
+            Nothing ->
+               let
+                  nstate2 = index (sNodeStates state2) idx
+                  nstate3 = nstate2 { nsInputs = update 0 (Just (LvI32 n)) (nsInputs nstate2) }
+               in
+                  updateNode idx state2 nstate3 []
+            Just _ ->
+               state2
    in
-      runStructure currVi id shouldStop state1 idx inputs
+      (state3, pvs)
 
 \end{code}
 
@@ -539,15 +550,15 @@ runStructure subVi initState shouldStop state1 idx inputs =
          Just (LvKState st) -> st
       statek'@(LvState _ qk _ _ _) = run statek subVi
       nextk
-         | not $ null qk      = trace ("GOT QK " ++ show qk ++ " IN STATEK " ++ show statek) $ Just (LvKState statek')
+         | not $ null qk      = trace ("GOT QK " ++ shw qk ++ " IN STATEK " ++ shw statek) $ Just (LvKState statek')
          | shouldStop statek' = Nothing
          | otherwise =
-              trc ("let's go " ++ show (i + 1)) $
-              trc ("before: " ++ show statek') $
+              trc ("let's go " ++ shw (i + 1)) $
+              trc ("before: " ++ shw statek') $
               Just (LvKState (nextStep subVi statek' (i + 1)))
          where (LvI32 i) = getControl statek' iIndex undefined
       nstate' = nstate { nsCont = nextk }
-      qMe = trace ("QUEUED MYSELF? " ++ (show $ isJust nextk) ++ "(LvN " ++ show idx ++ ")") $ [LvNodeAddr LvN idx | isJust nextk]
+      qMe = trace ("QUEUED MYSELF? " ++ (shw $ isJust nextk) ++ "(LvN " ++ shw idx ++ ")") $ [LvNodeAddr LvN idx | isJust nextk]
       state2 = state1 {
          sTs = sTs statek' + 1,
          sSched = sSched state1 ++ qMe,
@@ -807,7 +818,7 @@ insertIntoArray vx vy idxs =
    (LvArr lx@(LvArr x:_),  LvArr ly,  -1 : is)  -> recurseTo  is  lx (next x lx ly)
    (LvArr lx@(LvArr x:_),  LvArr ly,  i  : _ )  -> insertAt   i   lx (curr x lx ly)
    (LvArr lx,              _,         i  : _ )  -> insertAt   i   lx (base vy)
-   _ -> error ("WHAT " ++ show vx ++ " " ++ show vy ++ " " ++ show idxs)
+   _ -> error ("WHAT " ++ shw vx ++ " " ++ shw vy ++ " " ++ shw idxs)
    where
       (next, curr, base) =
          if ndims vx == ndims vy
