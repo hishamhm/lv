@@ -33,17 +33,35 @@ diff_ok: works.txt lhs_lines
 #	diff hs_lines lhs_lines > diff_ok
 #	[ `stat -c '%s' diff_ok` = 0 ]
 
-graph.avi: graph/graph-0000001.png
-	rm -f graph.avi && ffmpeg -f image2 -framerate 10 -i graph/graph-%07d.png graph.avi
+FRAMERATE=2
+FORMAT=png
+FORK=6
 
-graph/graph-0000001.png: graph/graph-0000001.dot
-	n=$$(ls graph/graph-*.dot | wc -l); for i in $$(seq -f "%07.0f" $$n); do echo $$i/$$n; dot -Tpng graph/graph-$$i.dot > graph/graph-$$i.png; done
+graph.mp4: graph/graph-0000001.$(FORMAT)
+	rm -f graph.mp4 && ffmpeg -f image2 -framerate $(FRAMERATE) -i graph/graph-%07d.$(FORMAT) -vcodec h264 -qp 0 -preset veryslow graph.mp4
+
+graph/graph-0000001.$(FORMAT): graph/graph-0000001.dot
+	frames=$$(ls graph/graph-*.dot | wc -l); \
+	time ( \
+	for j in `seq 0 $$[$(FORK)-1]`; \
+	do ( \
+	   for i in $$(seq 1 $(FORK) $$frames); \
+	   do \
+	      n=`printf "%07.0f" $$[i+j]`; \
+	      echo $$n/$$frames; \
+	      dot -T$(FORMAT) graph/graph-$$n.dot > graph/graph-$$n.$(FORMAT) || rm graph/graph-$$n.$(FORMAT); \
+	   done ) & \
+	done; \
+	wait; \
+	)
 
 graph/graph-0000001.dot: DemoLvInterpreter lv_viewer.lua
-	./DemoLvInterpreter 2> /dev/null | lua lv_viewer.lua
+	rm -f graph/graph-*dot
+	./DemoLvInterpreter 2> /dev/null | lua lv_viewer.lua $(FRAMERATE)
+	rm -f graph/graph-*$(FORMAT)
 
 clean:
 	rm -f lv.hi lv.o lv LvInterpreter DemoLvInterpreter
-	rm -f graph/graph-*png
+	rm -f graph/graph-*$(FORMAT)
 	rm -f graph/graph-*dot
 	rm -f LvInterpreter.pdf DemoLvInterpreter.pdf

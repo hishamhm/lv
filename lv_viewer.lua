@@ -13,9 +13,9 @@ local types = [[
             / 'LvCluster ' LvValue_list
             / 'LvArr ' LvValue_list
 
-   Int <- { '-'? [0-9]+ }
+   Int <- { [0-9]+ } / '(' { '-' [0-9]+ } ')'
    Double <- { posdouble } / '(' { '-' posdouble } ')'
-   posdouble <- [0-9]+ '.' [0-9]+
+   posdouble <- [0-9]+ '.' [0-9]+ ( 'e' '-'? [0-9]+ )?
    String <- '"' { [^"]* } '"'
    Boolean <- { 'True' / 'False' }
    LvValue_list <- '[' {| (LvValue (',' LvValue)* )? |} ']'
@@ -109,7 +109,7 @@ local vi_grammar = re.compile([[
            / {:type: 'LvCase'         :} ' '  {:vis:   LvVI_list   :}
            / {:type: 'LvFeedbackNode' :} ' (' {:value: LvValue     :} ')'
 
-   LvValue_list <- '[' {| (LvVI (',' LvVI)* )? |} ']'
+   LvVI_list <- '[' {| (LvVI (',' LvVI)* )? |} ']'
    
    sub_vi <- {:vi: '(' LvVI ')' :}
 
@@ -136,7 +136,9 @@ end
 
 local functions = {
    ["+"] = { inputs = {"x", "y"}, outputs = {"="} },
+   ["-"] = { inputs = {"x", "y"}, outputs = {"="} },
    ["*"] = { inputs = {"x", "y"}, outputs = {"="} },
+   ["/"] = { inputs = {"x", "y"}, outputs = {"="} },
    ["<"] = { inputs = {"x", "y"}, outputs = {"="} },
    ["ArrayMax&Min"] = { inputs = {"in"}, outputs = {"max","min"} },
    ["Bundle"] = { inputs = {"a1","a2"}, outputs = {"aout"} },
@@ -147,7 +149,7 @@ local functions = {
 
 local function label_for_function(name)
    if not functions[name] then
-      error("Unknown function "..name)
+      error("Unknown function '"..name.."'")
    end
    local ins, outs = functions[name].inputs, functions[name].outputs
    local trs = math.max(#ins, #outs)
@@ -161,9 +163,10 @@ local function label_for_function(name)
       end
       return ''
    end
-   local out = { '<<table border="0" cellborder="1" cellspacing="0" cellpadding="4">' }
+   local out = { '<<table border="0" cellborder="1" cellspacing="0">' }
    table.insert(out, '<tr>')
-   table.insert(out, '<td colspan="2">'..name:gsub("&", "&amp;"):gsub(">", "&gt;"):gsub("<", "&lt;")..'</td>')
+   local colspan = (#ins > 0 and #outs > 0) and 'colspan="2"' or ''
+   table.insert(out, '<td '..colspan..'>'..name:gsub("&", "&amp;"):gsub(">", "&gt;"):gsub("<", "&lt;")..'</td>')
    table.insert(out, '</tr>')
    for i = 1, trs do
       table.insert(out, '<tr>')
@@ -175,18 +178,61 @@ local function label_for_function(name)
    return table.concat(out)
 end
 
+local function map(fn, l)
+   local ret = {}
+   for i, v in ipairs(l) do ret[i] = fn(v) end
+   return ret
+end
+
+local function show(val)
+   if type(val) == "table" then
+      return "[" .. table.concat(map(show, val), " | ") .. "]"
+   else
+      return val
+   end
+end
+
+local function label_for_edge(name, type, value)
+   local val = show(value)
+   local out = { '<<table border="2" cellborder="1" cellspacing="0" cellpadding="4">' }
+   table.insert(out, '<tr><td>'..type..': '..name..'</td></tr>')
+   table.insert(out, '<tr><td>'..(val ~= "" and val or "&nbsp;")..'</td></tr>')
+   table.insert(out, '</table>>')
+   return table.concat(out)
+end
+
+local function match_node(graph, node)
+   return function(cases)
+      if type(node) == "string" then
+         if node:match("^Function_") then
+            return cases.LvFunction(graph.nodes[node])
+         else
+            return cases.LvSimpleNode(graph.nodes[node])
+         end
+      else
+         assert(type(node) == "table")
+         if node[1] then
+            return cases.LvCase(node)
+         else
+            assert(node.iindex)
+            return cases.LvStructure(node)
+         end
+      end
+   end
+end
+
 local function vi_to_graph(vi, graph_name, attributes)
    local function safe(name) return graph_name.."_"..name:gsub(" ", "_"):gsub("([^a-zA-Z_])", function(c) return ("%2x"):format(string.byte(c)) end) end
    local cluster_name = (graph_name == "G") and "G" or ("cluster_" .. graph_name)
    local graph = { name = cluster_name, cindex = {}, iindex = {}, nindex = {}, nodes = {}, edges = {}, subgraphs = {}, attributes = attributes or {} }
    for i, node in pairs(vi.controls) do
       local name = safe(node.name)
-      graph.nodes[name] = { name = name, attributes = { label = node.name, shape = "octagon" } }
+      graph.nodes[name] = { name = name, display = node.name, attributes = { style="filled", fillcolor="white", shape = "none", margin="0", label = label_for_edge(node.name, "Control", "") } }
       graph.cindex[i-1] = name
    end
    for i, node in pairs(vi.indicators) do
       local name = safe(node.name)
-      graph.nodes[name] = { name = name, attributes = { label = node.name, shape = "doubleoctagon" } }
+      graph.nodes[name] = { name = name, display = node.name, attributes = { style="filled", fillcolor="white", shape = "none", margin="0", label = label_for_edge(node.name, "Indicator", "") } }
       graph.iindex[i-1] = name
    end
    for i, node in pairs(vi.nodes) do
@@ -198,15 +244,15 @@ local function vi_to_graph(vi, graph_name, attributes)
          graph.subgraphs[name] = vi_to_graph(node.vi, name, {label = node.type, shape = "Msquare"} )
          graph.nindex[i-1] = graph.subgraphs[name]
       elseif node.type == "LvCase" then
-         for c, subvi in ipairs(node.vis) do
-            -- TODO fix presentation of graph
-            local subname = name .. "_case_" .. tostring(c)
-            graph.subgraphs[subname] = vi_to_graph(subvi, name, {label = node.type, shape = "Msquare"} )
-            graph.nindex[i-1] = graph.subgraphs[subname]
+         local subgraphs = {}
+         for _, subvi in ipairs(node.vis) do
+            table.insert(subgraphs, vi_to_graph(subvi, name, {label = node.type, shape = "Msquare"} ))
          end
+         graph.subgraphs[name] = subgraphs
+         graph.nindex[i-1] = subgraphs
       elseif node.type == "LvFunction" then
          name = "Function_" .. name
-         graph.nodes[name] = { name = name, attributes = { shape = "none", margin="0", label = label_for_function(node.fname) } }
+         graph.nodes[name] = { name = name, attributes = { shape = "none", style="filled", fillcolor="white", margin="0", label = label_for_function(node.fname) } }
          graph.nindex[i-1] = name
       elseif node.type == "LvConstant" then
          graph.nodes[name] = { name = name, attributes = { shape = "box", label = node.name } }
@@ -224,35 +270,40 @@ local function vi_to_graph(vi, graph_name, attributes)
       elseif wire.type == "LvI" then
          return graph.iindex[nidx]
       elseif wire.type == "LvN" then
-         if type(graph.nindex[nidx]) == "string" then
-            local name = graph.nindex[nidx]
-            if name:match("^Function_") then
-               return graph.nindex[nidx]..":"..prefix..pidx
-            else
-               assert(pidx == 0)
-               return graph.nindex[nidx]
-            end
-         else
+         local decode_structure = function(n)
             if prefix == "out" then
-               return graph.nindex[nidx].iindex[pidx]
+               return n.iindex[pidx]
             else
-               return graph.nindex[nidx].cindex[pidx]
+               return n.cindex[pidx]
             end
          end
+         return match_node(graph, graph.nindex[nidx]) {
+            LvFunction = function(n)
+               return n.name..":"..prefix..pidx
+            end,
+            LvSimpleNode = function(n)
+               assert(pidx == 0)
+               return n.name
+            end,
+            LvStructure = decode_structure,
+            LvCase = function(n)
+               return decode_structure(n[1])
+            end,
+         }
       end
    end
    for _, wire in pairs(vi.wires) do
       local src = decode_wire(wire.src, "out")
       local dst = decode_wire(wire.dst, "in")
       local probe = "probe_"..dst:gsub(":", "__")
-      graph.nodes[probe] = { name = probe, attributes = { label = "?", fixedsize = "true", --[[ width=0.6, ]] height=0.3, style = "rounded", shape = "box" } }
+      graph.nodes[probe] = { name = probe, attributes = { label = "", --[[ fixedsize = "true", width=0.6, ]] height=0.3, style = "rounded,filled", shape = "box" } }
       table.insert(graph.edges, {src, probe, attributes = { dir = "none" }})
       table.insert(graph.edges, {probe, dst})
    end
    return graph
 end
 
-local function write_graph(graph, filename)
+local function write_graph(graph, cases, filename)
    local fd = io.open(filename, "w")
 
    local function safe_attr(v)
@@ -300,7 +351,11 @@ local function write_graph(graph, filename)
    local write_subgraph
    local function write_subgraphs(subgraphs)
       for _, subgraph in pairs(subgraphs) do
-         write_subgraph(subgraph, "subgraph")
+         if subgraph.name then
+            write_subgraph(subgraph, "subgraph")
+         else
+            write_subgraph(cases[subgraph] or subgraph[1], "subgraph")
+         end
       end
    end
 
@@ -317,50 +372,64 @@ local function write_graph(graph, filename)
    fd:close()
 end
 
-local function map(fn, l)
-   local ret = {}
-   for i, v in ipairs(l) do ret[i] = fn(v) end
-   return ret
-end
-
-local function show(val)
-   if type(val) == "table" then
-      return "[" .. table.concat(map(show, val), " | ") .. "]"
-   else
-      return val
-   end
-end
-
 local function update_probe(graph, probe, val)
    if not graph.nodes[probe] then
       return
    end
    local tbl = graph.nodes[probe].attributes
---   tbl.fillcolor = (tbl.value ~= val) and "yellow" or "white"
-   tbl.label = show(val)
+   if val == "Nothing" then
+      val = ""
+   end
+   if val ~= "" then
+      tbl.fillcolor = "yellow"
+      tbl.label = show(val)
+      tbl.fixedsize = #tbl.label < 10 and "true" or "false"
+      tbl.value = val
+   else
+      tbl.fillcolor = "white"
+   end
 end
 
-local function adjust_probes(graph, state)
-   for i, control_value in ipairs(state.control_values) do
-      graph.nodes[graph.cindex[i-1]].attributes.label = control_value
+local function foreach_node(graph, fn)
+   for _, node in pairs(graph.nodes) do
+      fn(node)
    end
-   for i, indicator_value in ipairs(state.indicator_values) do
-      local probe = "probe_" .. graph.iindex[i-1]
-      update_probe(graph, probe, indicator_value)
-   end
-   for i, node_state in ipairs(state.node_states) do
-      local node = graph.nindex[i-1]
-      if type(node) == "string" then
-         for j, input_value in ipairs(node_state.inputs) do
-            local probe
-            if node:match("^Function") then
-               probe = "probe_" .. node .. "__in" .. (j-1)
-            else
-               probe = "probe_" .. node
-            end
-            update_probe(graph, probe, input_value)
+   for _, subgraph in pairs(graph.subgraphs) do
+      if subgraph[1] then
+         for _, case in ipairs(subgraph) do
+            foreach_node(case, fn)
          end
       else
+         foreach_node(subgraph, fn)
+      end
+   end
+end
+
+local function adjust_probes(graph, state, cases)
+   for i, control_value in ipairs(state.control_values) do
+      local node = graph.nodes[graph.cindex[i-1]]
+      node.attributes.label = label_for_edge(node.display, "Control", control_value)
+      node.attributes.fillcolor = "white"
+      if node.value ~= control_value then
+         node.attributes.fillcolor = "yellow"
+      end
+      node.value = control_value
+   end
+   for i, indicator_value in ipairs(state.indicator_values) do
+      local node = graph.nodes[graph.iindex[i-1]]
+      node.attributes.label = label_for_edge(node.display, "Indicator", indicator_value)
+      local probe = "probe_" .. graph.iindex[i-1]
+      node.attributes.fillcolor = "white"
+      if show(graph.nodes[probe].attributes.value) ~= show(indicator_value) then
+         node.attributes.fillcolor = "yellow"
+         update_probe(graph, probe, indicator_value)
+      else
+         update_probe(graph, probe, "Nothing")
+         graph.nodes[probe].attributes.value = indicator_value
+      end
+   end
+   for i, node_state in ipairs(state.node_states) do
+      local adjust_structure = function(node)
          for j, input_value in ipairs(node_state.inputs) do
             local probe = "probe_" .. node.cindex[j-1]
             if graph.nodes[probe] then
@@ -368,9 +437,40 @@ local function adjust_probes(graph, state)
             end
          end
          if next(node_state.cont) then
-            adjust_probes(node, node_state.cont)
+            adjust_probes(node, node_state.cont, cases)
          end
       end
+      match_node(graph, graph.nindex[i-1]) {
+         LvFunction = function(node)
+            assert(type(node) == "table")
+            assert(node.name)
+            for j, input_value in ipairs(node_state.inputs) do
+               local probe = "probe_" .. node.name .. "__in" .. (j-1)
+               update_probe(graph, probe, input_value)
+            end
+            node.attributes.fillcolor = next(node_state.cont) and "green" or "white"
+         end,
+         LvSimpleNode = function(node)
+            assert(type(node) == "table")
+            assert(node.name)
+            for _, input_value in ipairs(node_state.inputs) do
+               local probe = "probe_" .. node.name
+               update_probe(graph, probe, input_value)
+            end
+         end,
+         LvStructure = adjust_structure,
+         LvCase = function(node)
+            local case
+            if next(node_state.cont) then
+               print(inspect(node_state.cont))
+               case = tonumber(node_state.cont.control_values[1])
+            else
+               case = tonumber(node_state.inputs[1])
+            end
+            cases[node] = node[case + 1]
+            adjust_structure(cases[node])
+         end,
+      }
    end
 end
 
@@ -381,9 +481,14 @@ local frame = 1
 local function process_line(line)
    if line:match("^LvState") then
       local state = parse(state_grammar, line)
-      adjust_probes(graph, state)
+      local cases = {}
+      foreach_node(graph, function(node)
+         print(node.name)
+         node.attributes.fillcolor = "white"
+      end)
+      adjust_probes(graph, state, cases)
       graph.attributes.label = "ts = "..state.ts
-      write_graph(graph, "graph/graph-"..("%07d"):format(frame)..".dot")
+      write_graph(graph, cases, "graph/graph-"..("%07d"):format(frame)..".dot")
       frame = frame + 1
       return true
    elseif line:match("^LvVI") then
@@ -394,9 +499,6 @@ local function process_line(line)
       graph = vi_to_graph(vi, "G")
       --print(inspect(graph))
       graph.attributes.rankdir = "LR"
-      graph.attributes.label = "ts = 0"
-      write_graph(graph, "graph/graph-"..("%07d"):format(frame)..".dot")
-      frame = frame + 1
       return true
    end
 end
@@ -409,6 +511,6 @@ for line in io.stdin:lines() do
    end
 end
 
-for _ = 1, 10 do
+for _ = 1, (tonumber(arg[1]) or 1) * 5 do
    process_line(last_line)
 end

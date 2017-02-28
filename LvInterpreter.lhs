@@ -1,6 +1,3 @@
-\begin{code}
-{-# LANGUAGE BangPatterns #-}
-\end{code}
 \documentclass[a4paper]{article}
 %\setlength{\parskip}{\baselineskip}
 \usepackage[margin=3cm]{geometry}
