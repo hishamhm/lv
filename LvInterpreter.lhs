@@ -22,7 +22,20 @@
 
 \maketitle{}
 
+This is an interpreter designed to model the core semantics of LabVIEW,
+with a focus on the interesting features of its dataflow language.
+
+This work was written in Literate Haskell, and is a description of the entire
+interpreter, including its complete listings. The text was written so that it
+should be understandable without a detailed reading of the source code, but
+the sources are nevertheless included for completeness and as supporting
+material for the interested reader. The source code in @.lhs@ format
+(\LaTeX~with embedded Haskell) is also available at
+\url{https://hisham.hm/thesis/}.
+
 %BEGIN LYX TEXT
+
+This implementation uses only standard modules included in the Haskell Platform:
 
 \section{Introduction}
 
