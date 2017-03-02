@@ -5,7 +5,7 @@
 \definecolor{darkblue}{rgb}{0,0,0.5}
 \usepackage[unicode=true,pdfusetitle,
  bookmarks=true,bookmarksnumbered=false,bookmarksopen=false,
- breaklinks=true,pdfborder={0 0 0},backref=false,colorlinks=true,linkcolor=darkblue]
+ breaklinks=true,pdfborder={0 0 0},backref=false,colorlinks=false,linkcolor=darkblue]
  {hyperref}
 
 %BEGIN LYX PREAMBLE
@@ -51,13 +51,7 @@ import Data.List.Split
 import Data.Maybe
 import Data.Foldable (toList)
 import Data.Generics.Aliases (orElse)
-
-\end{code}
-
-\section{Debugging}
-
-\begin{code}
-
+-- ** BEGIN CUT
 import Debug.Trace
 
 -- Debugging on:
@@ -71,6 +65,7 @@ shw x = (chr 27 : "[1;33m") ++ show x ++ (chr 27 : "[0m")
 -- Debugging off:
 --tsi = id
 --trc m = id
+-- ** END CUT
 
 \end{code}
 
@@ -166,7 +161,7 @@ data LvNodeType  =  LvN
 
 \begin{code}
 
-{-"\hypertarget{LvState}{}\nolinebreak"-}
+{-"\hypertarget{LvState}{}"-}
 data LvState =  LvState { 
                    sTs :: Int,
                    sSched :: [LvNodeAddr],
@@ -334,7 +329,7 @@ runThing (LvNodeAddr LvN idx) state0 mainVi =
       (_, node) = vNodes mainVi !! idx
       (state2, pvs) = runNode node state1 inputs idx
    in
-      trace ("RUNTHING (LVN, " ++ shw idx ++ ") ON STATE " ++ shw state0 ++ " FOR VI " ++ shw mainVi) $
+      trc ("RUNTHING (LVN, " ++ shw idx ++ ") ON STATE " ++ shw state0 ++ " FOR VI " ++ shw mainVi) $
       foldl' (\s (p, v) -> fire mainVi v (LvPortAddr LvN idx p) s) state2 pvs
 
 -- Produce a sequence of n empty inputs
@@ -355,7 +350,7 @@ updateNode idx st newNstate newSched =
 
 fire :: LvVI -> LvValue -> LvPortAddr -> LvState -> LvState
 fire vi value addr state =
-   trc ("firing " ++ shw addr ++ " with value " ++ shw value ++ "\tvi <" ++ shw (take 30 (show vi)) ++ ">\tstate " ++ shw state) $!
+   trc ("firing " ++ shw addr ++ " with value " ++ shw value ++ "\tvi <" ++ shw (take 30 (show vi)) ++ ">\tstate " ++ shw state) $
    foldl' checkWire state (vWires vi)
       where
       checkWire s (LvWire src dst) =
@@ -462,7 +457,7 @@ runNode (LvFunction name) state1 inputs idx =
          (updateNode idx state1 nstate{ nsCont = Just k' } [LvNodeAddr LvN idx], [])
 
 runNode (LvConstant value) state1 _ _ =
-   trc ("firing constant " ++ shw value)
+   trc ("firing constant " ++ shw value) $
    (state1, [(0, value)])
 
 \end{code}
@@ -483,18 +478,18 @@ runNode (LvFeedbackNode initVal) state1 inputs _ =
 -- TODO for when no N is set and an array is given as input tunnel
 -- TODO check what happens when both are given
 runNode (LvFor subVi) state1 inputs idx =
-   trc "firing for" $
+   trc ("firing for") $
    runStructure subVi initCounter shouldStop state1 idx inputs
    where
       shouldStop st =
-         trc (shw i' ++ " >= " ++ shw n) (i' >= n)
+         trc (shw (i + 1) ++ " >= " ++ shw n) $
+         (i + 1 >= n)
          where
             (LvI32 i) = getControl st iIndex (LvI32 0)
-            i' = i + 1
             LvI32 n = coerceToInt $ getControl st nIndex (LvI32 0)
 
 runNode (LvWhile subVi) state1 inputs idx =
-   trc "firing while" $
+   trc ("firing while") $
    runStructure subVi initCounter shouldStop state1 idx inputs
    where
       shouldStop st =
@@ -560,7 +555,7 @@ runStructure subVi initState shouldStop state1 idx inputs =
          Just (LvKState st) -> st
       statek'@(LvState _ qk _ _ _) = run statek subVi
       nextk
-         | not $ null qk      = trace ("GOT QK " ++ shw qk ++ " IN STATEK " ++ shw statek) $ Just (LvKState statek')
+         | not $ null qk      = trc ("GOT QK " ++ shw qk ++ " IN STATEK " ++ shw statek) $ Just (LvKState statek')
          | shouldStop statek' = Nothing
          | otherwise =
               trc ("let's go " ++ shw (i + 1)) $
@@ -568,7 +563,7 @@ runStructure subVi initState shouldStop state1 idx inputs =
               Just (LvKState (nextStep subVi statek' (i + 1)))
          where (LvI32 i) = getControl statek' iIndex undefined
       nstate' = nstate { nsCont = nextk }
-      qMe = trace ("QUEUED MYSELF? " ++ (shw $ isJust nextk) ++ "(LvN " ++ shw idx ++ ")") $ [LvNodeAddr LvN idx | isJust nextk]
+      qMe = trc ("QUEUED MYSELF? " ++ (shw $ isJust nextk) ++ "(LvN " ++ shw idx ++ ")") $ [LvNodeAddr LvN idx | isJust nextk]
       state2 = state1 {
          sTs = sTs statek' + 1,
          sSched = sSched state1 ++ qMe,
@@ -828,7 +823,6 @@ insertIntoArray vx vy idxs =
    (LvArr lx@(LvArr x:_),  LvArr ly,  -1 : is)  -> recurseTo  is  lx (next x lx ly)
    (LvArr lx@(LvArr x:_),  LvArr ly,  i  : _ )  -> insertAt   i   lx (curr x lx ly)
    (LvArr lx,              _,         i  : _ )  -> insertAt   i   lx (base vy)
-   _ -> error ("WHAT " ++ shw vx ++ " " ++ shw vy ++ " " ++ shw idxs)
    where
       (next, curr, base) =
          if ndims vx == ndims vy

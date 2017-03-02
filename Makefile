@@ -10,12 +10,22 @@ DemoLvInterpreter.tex: DemoLvInterpreter.lhs Lv_format.lhs
 LvInterpreter.pdf: LvInterpreter.tex
 	pdflatex LvInterpreter.tex
 
-LvInterpreter.tex: LvInterpreter.lhs Lv_format.lhs
-	~/.cabal/bin/lhs2TeX LvInterpreter.lhs > LvInterpreter.tex
+LvInterpreter.tex: LvInterpreter.in.lhs Lv_format.lhs
+	rm -f LvInterpreter.lhs
+	lua cut_comments.lua --lhs2tex < LvInterpreter.in.lhs > LvInterpreter.lhs
+	~/.cabal/bin/lhs2TeX LvInterpreter.lhs > LvInterpreter.tex; err=$$?; rm LvInterpreter.lhs; exit $$err
 
-DemoLvInterpreter: DemoLvInterpreter.lhs LvInterpreter.lhs
+DemoLvInterpreter: DemoLvInterpreter.lhs LvInterpreter.in.lhs
+	rm -f LvInterpreter.lhs
+	cp LvInterpreter.in.lhs LvInterpreter.lhs
 	rm -f LvInterpreter.o LvInterpreter.hi DemoLvInterpreter.o DemoLvInterpreter.hi
-	ghc -o DemoLvInterpreter DemoLvInterpreter.lhs
+	ghc -o DemoLvInterpreter DemoLvInterpreter.lhs; err=$$?; rm LvInterpreter.lhs; exit $$err
+
+DemoLvInterpreter_nodebug: DemoLvInterpreter.lhs LvInterpreter.in.lhs
+	rm -f LvInterpreter.lhs
+	lua cut_comments.lua < LvInterpreter.in.lhs > LvInterpreter.lhs
+	rm -f LvInterpreter.o LvInterpreter.hi DemoLvInterpreter.o DemoLvInterpreter.hi
+	ghc -o DemoLvInterpreter DemoLvInterpreter.lhs; err=$$?; rm LvInterpreter.lhs; exit $$err
 
 lv: lv.hs
 	ghc -o lv lv.hs
@@ -64,4 +74,5 @@ clean:
 	rm -f lv.hi lv.o lv LvInterpreter DemoLvInterpreter
 	rm -f graph/graph-*$(FORMAT)
 	rm -f graph/graph-*dot
+	rm -f LvInterpreter.tex
 	rm -f LvInterpreter.pdf DemoLvInterpreter.pdf
