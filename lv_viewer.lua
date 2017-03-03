@@ -4,7 +4,7 @@ local inspect = require("inspect")
 
 local types = [[
 
-   LvNodeType <- 'LvN' / 'LvC' / 'LvI'
+   LvElemType <- 'LvN' / 'LvC' / 'LvI'
 
    LvValue <- 'LvDBL ' Double
             / 'LvI32 ' Int
@@ -32,27 +32,25 @@ local state_grammar = re.compile([[
    |} '}'
    
    sTs              <- 'sTs = ' Int
-   sSched           <- 'sSched = ' LvNodeAddr_list
+   sSched           <- 'sSched = ' LvElemAddr_list
    sNodeStates      <- 'sNodeStates = ' Seq_LvNodeState
    sControlValues   <- 'sControlValues = ' Seq_Maybe_LvValue
    sIndicatorValues <- 'sIndicatorValues = ' Seq_Maybe_LvValue
 
-   LvNodeAddr_list    <- '[' {| (LvNodeAddr    (',' LvNodeAddr)*    )? |} ']'
+   LvElemAddr_list    <- '[' {| (LvElemAddr    (',' LvElemAddr)*    )? |} ']'
    LvNodeState_list   <- '[' {| (LvNodeState   (',' LvNodeState)*   )? |} ']'
    Maybe_LvValue_list <- '[' {| (Maybe_LvValue (',' Maybe_LvValue)* )? |} ']'
 
    Seq_LvNodeState   <- 'fromList ' LvNodeState_list
    Seq_Maybe_LvValue <- 'fromList ' Maybe_LvValue_list
 
-   LvNodeAddr <- { '{' {:type: LvNodeType :} ' ' {:port: Int :} '}' }
+   LvElemAddr <- { '{' {:type: LvElemType :} ' ' {:port: Int :} '}' }
 
    LvNodeState <- 'LvNodeState {' {|
-      {:name:   nsName :} ', '
       {:cont:   nsCont :} ', '
       {:inputs: nsInputs :}
    |} '}'
 
-   nsName <- 'nsName = ' String
    nsCont <- 'nsCont = ' Maybe_LvCont
    nsInputs <- 'nsInputs = ' Seq_Maybe_LvValue
 
@@ -100,14 +98,14 @@ local vi_grammar = re.compile([[
    vNodes <- 'vNodes = ' String_LvNode_pair_list
    vWires <- 'vWires = ' LvWire_list
 
-   LvNode <- {:type: 'LvSubVI'        :} ' '  sub_vi
-           / {:type: 'LvFunction'     :} ' '  {:fname: String      :}
-           / {:type: 'LvConstant'     :} ' (' {:value: LvValue     :} ')'
-           / {:type: 'LvWhile'        :} ' '  sub_vi
-           / {:type: 'LvFor'          :} ' '  sub_vi
-           / {:type: 'LvSequence'     :} ' '  sub_vi
-           / {:type: 'LvCase'         :} ' '  {:vis:   LvVI_list   :}
-           / {:type: 'LvFeedbackNode' :} ' (' {:value: LvValue     :} ')'
+   LvNode <- 'LvStructure ' {:type: 'LvSubVI'    :} ' ' sub_vi
+           / 'LvStructure ' {:type: 'LvWhile'    :} ' ' sub_vi
+           / 'LvStructure ' {:type: 'LvFor'      :} ' ' sub_vi
+           / 'LvStructure ' {:type: 'LvSequence' :} ' ' sub_vi
+           / {:type: 'LvFunction'     :} ' '  {:fname: String    :}
+           / {:type: 'LvConstant'     :} ' (' {:value: LvValue   :} ')'
+           / {:type: 'LvCase'         :} ' '  {:vis:   LvVI_list :}
+           / {:type: 'LvFeedbackNode' :} ' (' {:value: LvValue   :} ')'
 
    LvVI_list <- '[' {| (LvVI (',' LvVI)* )? |} ']'
    
@@ -118,7 +116,7 @@ local vi_grammar = re.compile([[
       {:dst: 'wDst = ' LvPortAddr :}
    |} '}'
 
-   LvPortAddr <- {| '{' {:type: LvNodeType :} ' ' {:nidx: Int :} ', ' {:pidx: Int :} '}' |}
+   LvPortAddr <- {| '{' {:type: LvElemType :} ' ' {:nidx: Int :} ', ' {:pidx: Int :} '}' |}
 
 ]] .. types)
 
