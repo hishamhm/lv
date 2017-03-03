@@ -47,7 +47,6 @@ import Data.Sequence (Seq, fromList, index, update, mapWithIndex, fromList, elem
 import qualified Data.Sequence as Seq (length, take)
 import Data.Char
 import Data.List
-import Data.List.Split
 import Data.Maybe
 import Data.Foldable (toList)
 import Data.Generics.Aliases (orElse)
@@ -71,6 +70,19 @@ shw x = (chr 27 : "[1;33m") ++ show x ++ (chr 27 : "[0m")
 
 \section{Representation of programs}
 
+A program in LabVIEW (called a VI, or Virtual Instrument) is a graph
+connecting different kinds of objects. In LabVIEW terminology, these objects
+are called \emph{controls}, which are input-only, \emph{indicators}, which are
+output-only, and \emph{nodes}, which are all other operations. Throughout the
+implementation, we will use this nomenclature; in particular the name ``node''
+will be used only for graph elements which are not controls or indicators.
+Graph elements are connected through wires. 
+
+We represent a VI as a record containing a series of lists, enumerating
+controls, indicators, nodes and wires. Controls, indicators and nodes are
+paired with their names for display purposes only. The list of wires
+constitutes an adjacency list for the graph connections.
+
 \begin{code}
 
 data LvVI =  LvVI {
@@ -81,45 +93,121 @@ data LvVI =  LvVI {
              }
    deriving Show
 
+\end{code}
+
+A control in LabVIEW is an input widget in the VI's front panel, which also
+gets a representation as an object in the block diagram. However, since
+LabVIEW includes structured graphs composed of subgraphs representing
+structures such as for- and while-loops, we build these graphs in the
+interpreter recursively, declaring subgraphs as |LvVI| objects. For this
+reason, we use controls and indicators not only to represent GUI objects of
+the front panel, but also inputs and outputs of subgraphs. For this reason, we
+declare a number of types of controls: a plain control which corresponds to a
+GUI object; an "auto" control that represents an automatically-generated input
+value, such as the increment count in a for-loop; a "tunnel" control, which is
+an input that connects data from the enclosing graph to the subgraph; and a
+"shift-register" control, which is the input terminator for shift registers (a
+construct to send data across iterations of a loop).
+
+\begin{code}
+
 data LvControl  =  LvControl LvValue
                 |  LvAutoControl
                 |  LvTunControl
-                |  LvTunSRControl
                 |  LvSRControl LvValue
    deriving Show
 
 \end{code}
 
+An indicator in LabVIEW is an output widget in the VI's front panel. Like
+controls, indicators are represented both in the front panel (as a GUI widget)
+and in the block diagram (as a connectable object). For the same reasons as
+explained above for controls, we have different kinds of indicators: the plain
+indicator, which represents GUI indicators proper; the "shift-register"
+indicator, which sends data to its respective shift-register control (represented
+by the numeric index of the control in its constructor) for the next execution
+of a loop; and "tunnel" indicators, which send data out of the subgraph back
+to the enclosing graph.
+
+Tunnel indicators can be of different types: "last value", which sends out the
+value produced by the last iteration of the subgraph; "auto-indexing", which
+produces an array accumulating all elements received by the tunnel across all
+iterations of the subgraph; and "concatenating", which concatenates all
+elements received. Here, we implement the "last value" and "auto-indexing"
+modes, since the "concatenating" mode is a mere convenience, that could be
+achieved by concatenating the elements of the array returned in the
+"auto-indexing" mode.
+
+The LabVIEW interface enables auto-indexing by default when sending data
+out of for-loops, but this can be overridden by the user in the UI.
+
 \begin{code}
 
 data LvIndicator  =  LvIndicator LvValue
-                  |  LvTunIndicator LvTunnelMode
                   |  LvSRIndicator Int
+                  |  LvTunIndicator LvTunnelMode
+   deriving Show
+
+data LvTunnelMode  =  LvAutoIndexing
+                   |  LvLastValue
    deriving Show
 
 \end{code}
 
-\begin{code}
-data LvTunnelMode  =  LvAutoIndexing -- TODO implement
-                   |  LvLastValue
-                      -- TODO list other kinds
-   deriving Show
+There are several kinds of nodes in LabVIEW. The vast majority are functions,
+which implement various operations. Depending on the function, identified here
+by their name, they can zero or more input ports, and zero or more output ports.
 
-data LvNode  =  LvSubVI LvVI
-             |  LvFunction String
+A constant is a node that holds a value. It has a single output port and
+immediately fires its value.
+
+There are various kinds of control structures. Most of them contain a single
+subgraph, and due to their shared implementation, we grouped them in the 
+|LvStructure| type constructor: those are while-loops, for-loops, sequences,
+and sub-VIs. The case-structure controls a list of sub-VIs, and for this
+reason is handled separately with the |LvCase| constructor.
+
+A feedback node holds the value it receives through its input port and fires
+it the next time the program is executed. This means that, in practice, it 
+acts like a shift register when the program is launched in "continuous mode",
+which is a mode of execution equivalent to enclosing the entire program in an
+infinite loop.
+
+The LabVIEW UI enforces that the only connections producing explicit cycles in
+the graph are those connecting feedback nodes: wiring objects in a graph
+producing a cycle automatically inserts a feedback node. This keeps the
+dataflow model of LabVIEW static: each execution of a graph executes
+acyclically. Implicit cycles can be produced in loop structures through the
+use of shift registers, but shift registers are only triggered after each
+iteration of a subgraph executes completely.
+
+\begin{code}
+
+data LvNode  =  LvFunction String
              |  LvConstant LvValue
-             |  LvWhile LvVI
-             |  LvFor LvVI
-             |  LvSequence LvVI
+             |  LvStructure LvStrucType LvVI
              |  LvCase [LvVI]
              |  LvFeedbackNode LvValue
    deriving Show
 
+data LvStrucType  = LvWhile
+                  | LvFor
+                  | LvSequence
+                  | LvSubVI
+   deriving Show
+
 \end{code}
 
-Unlike LabVIEW, our implementation allows arbitrarily recursive types (e.g. a
-cluster of arrays of clusters). In the |LvArr| constructor, we have an 
-extra value that serves as a marker for the type of the array values.
+LabVIEW supports a large number of primitive data types. Here, we implement
+four primitive data types (floating-point and integer numbers, string and
+boolean), the \emph{cluster} type, which implements a heterogeneous tuple of
+values (working like a record or "struct"), and homogeneous arrays.
+
+Unlike LabVIEW, our implementation allows arbitrarily recursive types (e.g. we
+support a cluster of arrays of arrays of clusters). Since we assume that
+programs entered in the output are properly type-checked, implementing the
+same restrictions that LabVIEW enforces to aggregate data types could be
+easily done in the type-checking step.
 
 \begin{code}
 
@@ -134,7 +222,7 @@ data LvValue  =  LvDBL Double
 \end{code}
 
 We chose to implement only one floating-point and one integer type. Besides
-the types listed above, LabVIEW includes the following types in total:
+the types listed above, LabVIEW includes the following numeric types in total:
 extended and single-precision floating-point numbers; fixed-point numbers;
 signed and unsigned integers of 8, 16, 32 and 64 bits; single, double and
 extended-precision complex numbers.
@@ -216,59 +304,6 @@ indices l = [0 .. (length l - 1)]
 
 \end{code}
 
-\section{Program construction}
-
-\begin{code}
-
-data LvStringWire = LvStringWire String String
-   deriving Show
-
-makeVI ::  [(String, LvControl)] -> [(String, LvIndicator)]
-           -> [(String, LvNode)] -> [LvStringWire] -> LvVI
-makeVI controls indicators nodes stringWires =
-   LvVI {
-      vControls = controls,
-      vIndicators = indicators,
-      vNodes = nodes,
-      vWires = map convert stringWires
-   }
-   where
-      convert :: LvStringWire -> LvWire      
-      convert (LvStringWire src dst) =
-         let
-            (srcType,  srcNode,  srcPort')  = findNode controls    LvC  vIndicators  src
-            (dstType,  dstNode,  dstPort')  = findNode indicators  LvI  vControls    dst
-         in
-            LvWire (LvPortAddr srcType srcNode srcPort') (LvPortAddr dstType dstNode dstPort')
-
-      findIndex :: [(String, a)] -> String -> Maybe Int
-      findIndex es name = elemIndex name $ map fst es
-      
-      must :: (String -> Maybe a) -> String -> a
-      must fn name = fromMaybe (error ("No such entry " ++ name)) (fn name)
-
-      findNode ::  [(String, a)] -> LvNodeType -> (LvVI -> [(String, b)])
-                   -> String -> (LvNodeType, Int, Int)
-      findNode entries etype nodeEntries name
-       | isJust $ find (== ':') name =
-            let 
-               [nodeName, portName] = splitOn ":" name
-               node = (must . flip lookup) nodes nodeName
-               findPort (LvWhile subVi)     = must $ findIndex (nodeEntries subVi)
-               findPort (LvFor subVi)       = must $ findIndex (nodeEntries subVi)
-               findPort (LvSequence subVi)  = must $ findIndex (nodeEntries subVi)
-               findPort (LvCase subVis)     = must $ findIndex (nodeEntries (head subVis))
-               findPort (LvFunction _)      = \s -> if null s then 0 else read s
-               findPort _                   = \s -> 0
-            in
-               (LvN, (must . findIndex) nodes nodeName, findPort node portName)
-       | otherwise =
-          case findIndex entries name of
-          Just i -> (etype, i, 0)
-          Nothing -> findNode entries etype nodeEntries (name ++ ":0")
-
-\end{code}
-
 \section{Main loop}
 
 \begin{code}
@@ -293,7 +328,7 @@ run (LvState ts (q:qs) nstates cvs ivs) mainVi =
    let
       state0 = LvState (ts + 1) qs nstates cvs ivs
    in
-      runThing q state0 mainVi
+      runEvent q state0 mainVi
 
 \end{code}
 
@@ -303,13 +338,13 @@ run (LvState ts (q:qs) nstates cvs ivs) mainVi =
 
 \begin{code}
 
-runThing :: LvNodeAddr -> LvState -> LvVI -> LvState
-runThing (LvNodeAddr LvC idx) state0 mainVi =
+runEvent :: LvNodeAddr -> LvState -> LvVI -> LvState
+runEvent (LvNodeAddr LvC idx) state0 mainVi =
    fire mainVi (fromMaybe undefined $ index cvs idx) (LvPortAddr LvC idx 0) state0
    where
       cvs = sControlValues state0
 
-runThing (LvNodeAddr LvN idx) state0 mainVi =
+runEvent (LvNodeAddr LvN idx) state0 mainVi =
    let
       nstates = sNodeStates state0
       nstate = index nstates idx
@@ -329,7 +364,7 @@ runThing (LvNodeAddr LvN idx) state0 mainVi =
       (_, node) = vNodes mainVi !! idx
       (state2, pvs) = runNode node state1 inputs idx
    in
-      trc ("RUNTHING (LVN, " ++ shw idx ++ ") ON STATE " ++ shw state0 ++ " FOR VI " ++ shw mainVi) $
+      trc ("runEvent (LVN, " ++ shw idx ++ ") ON STATE " ++ shw state0 ++ " FOR VI " ++ shw mainVi) $
       foldl' (\s (p, v) -> fire mainVi v (LvPortAddr LvN idx p) s) state2 pvs
 
 -- Produce a sequence of n empty inputs
@@ -362,11 +397,13 @@ propagate :: LvValue -> LvVI -> LvPortAddr -> LvState -> LvState
 propagate value vi (LvPortAddr LvI dnode _) state =
    let
       (_, indicator) = vIndicators vi !! dnode
-      newValue = case indicator of
-                 LvIndicator _                 -> value
-                 LvSRIndicator _               -> value
-                 LvTunIndicator LvLastValue    -> value
-                 LvTunIndicator LvAutoIndexing -> insertIntoArray (fromMaybe (LvArr []) (index (sIndicatorValues state) dnode)) value []
+      newValue =
+         case indicator of
+         LvIndicator _                  -> value
+         LvSRIndicator _                -> value
+         LvTunIndicator LvLastValue     -> value
+         LvTunIndicator LvAutoIndexing  ->  insertIntoArray (fromMaybe (LvArr [])
+                                            (index (sIndicatorValues state) dnode)) value []
    in
       state {
          sTs = sTs state + 1,
@@ -396,9 +433,7 @@ propagate value vi (LvPortAddr LvN dnode dport) state =
 shouldSchedule :: LvNode -> Seq (Maybe LvValue) -> Bool
 shouldSchedule node inputs =
    case node of
-      LvWhile vi -> shouldScheduleSubVI vi inputs
-      LvFor vi -> shouldScheduleSubVI vi inputs
-      LvSequence vi -> shouldScheduleSubVI vi inputs
+      LvStructure _ vi -> shouldScheduleSubVI vi inputs
       LvCase vis -> shouldScheduleSubVI (head vis) inputs
       LvFunction name ->
          isNothing $ elemIndexL Nothing mandatoryInputs
@@ -419,7 +454,6 @@ shouldScheduleSubVI vi inputs =
          unfilledTunnel cidx = 
             case vControls vi !! cidx of
                (_, LvTunControl) -> isNothing (index inputs cidx)
-               (_, LvTunSRControl) -> isNothing (index inputs cidx)
                _ -> False
 
 \end{code}
@@ -430,8 +464,6 @@ shouldScheduleSubVI vi inputs =
 
 runNode ::  LvNode -> LvState -> [Maybe LvValue] -> Int
             -> (LvState, [(Int, LvValue)])
-
-runNode (LvSubVI _) state1 _ _ = (state1, []) -- TODO initialize state, run subVI
 
 runNode (LvFunction name) state1 inputs idx =
    let
@@ -477,7 +509,7 @@ runNode (LvFeedbackNode initVal) state1 inputs _ =
 
 -- TODO for when no N is set and an array is given as input tunnel
 -- TODO check what happens when both are given
-runNode (LvFor subVi) state1 inputs idx =
+runNode (LvStructure LvFor subVi) state1 inputs idx =
    trc ("firing for") $
    runStructure subVi initCounter shouldStop state1 idx inputs
    where
@@ -488,7 +520,7 @@ runNode (LvFor subVi) state1 inputs idx =
             (LvI32 i) = getControl st iIndex (LvI32 0)
             LvI32 n = coerceToInt $ getControl st nIndex (LvI32 0)
 
-runNode (LvWhile subVi) state1 inputs idx =
+runNode (LvStructure LvWhile subVi) state1 inputs idx =
    trc ("firing while") $
    runStructure subVi initCounter shouldStop state1 idx inputs
    where
@@ -498,10 +530,9 @@ runNode (LvWhile subVi) state1 inputs idx =
             (LvBool test) = getIndicator st testIndex
                             (error "test boolean in 'while' must be set")
 
-runNode (LvSequence vi) state1 inputs idx =
+runNode (LvStructure LvSequence vi) state1 inputs idx =
    let
-      shouldStop st = True
-      (state2, pvs) = runStructure vi id shouldStop state1 idx inputs -- TODO fix inputs
+      (state2, pvs) = runStructure vi id (const True) state1 idx inputs
       nstate2 = index (sNodeStates state2) idx
       nextq = [ (0, LvBool True) | isNothing (nsCont nstate2) ]
    in
@@ -518,8 +549,7 @@ runNode (LvCase vis) state1 inputs idx =
              Just _ ->
                 (\(LvI32 i) -> i) $
                 fromMaybe (error "no input 0!?") $ index (nsInputs nstate1) 0
-      shouldStop st = True
-      (state2, pvs) = runStructure (vis !! n) id shouldStop state1 idx inputs
+      (state2, pvs) = runStructure (vis !! n) id (const True) state1 idx inputs
       state3 =
          case nsCont nstate1 of
             Nothing ->
@@ -532,6 +562,10 @@ runNode (LvCase vis) state1 inputs idx =
                state2
    in
       (state3, pvs)
+
+runNode (LvStructure LvSubVI subVi) state1 inputs idx =
+   trc ("firing subvi") $
+   runStructure subVi id (const True) state1 idx inputs
 
 \end{code}
 
@@ -615,14 +649,11 @@ initialState ts vi =
                                                      (emptyInputs $ nrInputs i node)
 
       nrInputs :: Int -> LvNode -> Int
-      nrInputs _ (LvSubVI subVi)      = length $ vControls subVi
-      nrInputs i (LvFunction _)       = nrConnectedInputs i vi
-      nrInputs _ (LvConstant _)       = 0
-      nrInputs _ (LvFor subVi)        = length $ vControls subVi
-      nrInputs _ (LvWhile subVi)      = length $ vControls subVi
-      nrInputs _ (LvSequence subVi)   = length $ vControls subVi
-      nrInputs _ (LvCase subVis)      = length $ vControls (head subVis)
-      nrInputs _ (LvFeedbackNode _)   = 1
+      nrInputs i (LvFunction _)         = nrConnectedInputs i vi
+      nrInputs _ (LvConstant _)         = 0
+      nrInputs _ (LvStructure _ subVi)  = length $ vControls subVi
+      nrInputs _ (LvCase subVis)        = length $ vControls (head subVis)
+      nrInputs _ (LvFeedbackNode _)     = 1
 
       makeControlValue :: LvControl -> Maybe LvValue
       makeControlValue (LvControl    v)  = Just v

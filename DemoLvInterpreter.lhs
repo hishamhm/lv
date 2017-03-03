@@ -14,6 +14,10 @@
 \begin{code}
 
 import LvInterpreter
+import Data.Sequence (fromList, elemIndexL)
+import Data.List
+import Data.Maybe
+import Data.List.Split
 
 \end{code}
 
@@ -25,8 +29,59 @@ main =
       loop (initialState 0 program) program
          where program = testingCase
 
+data LvStringWire = LvStringWire String String
+   deriving Show
+
 wire :: String -> String -> LvStringWire
 wire a b = LvStringWire a b
+
+\end{code}
+
+\section{Program construction}
+
+\begin{code}
+
+makeVI ::  [(String, LvControl)] -> [(String, LvIndicator)]
+           -> [(String, LvNode)] -> [LvStringWire] -> LvVI
+makeVI controls indicators nodes stringWires =
+   LvVI {
+      vControls = controls,
+      vIndicators = indicators,
+      vNodes = nodes,
+      vWires = map convert stringWires
+   }
+   where
+      convert :: LvStringWire -> LvWire      
+      convert (LvStringWire src dst) =
+         let
+            (srcType,  srcNode,  srcPort')  = findNode controls    LvC  vIndicators  src
+            (dstType,  dstNode,  dstPort')  = findNode indicators  LvI  vControls    dst
+         in
+            LvWire (LvPortAddr srcType srcNode srcPort') (LvPortAddr dstType dstNode dstPort')
+
+      findIndex :: [(String, a)] -> String -> Maybe Int
+      findIndex es name = elemIndex name $ map fst es
+      
+      must :: (String -> Maybe a) -> String -> a
+      must fn name = fromMaybe (error ("No such entry " ++ name)) (fn name)
+
+      findNode ::  [(String, a)] -> LvNodeType -> (LvVI -> [(String, b)])
+                   -> String -> (LvNodeType, Int, Int)
+      findNode entries etype nodeEntries name
+       | isJust $ find (== ':') name =
+            let 
+               [nodeName, portName] = splitOn ":" name
+               node = (must . flip lookup) nodes nodeName
+               findPort (LvStructure _ subVi)  = must $ findIndex (nodeEntries subVi)
+               findPort (LvCase subVis)        = must $ findIndex (nodeEntries (head subVis))
+               findPort (LvFunction _)         = \s -> if null s then 0 else read s
+               findPort _                      = \s -> 0
+            in
+               (LvN, (must . findIndex) nodes nodeName, findPort node portName)
+       | otherwise =
+          case findIndex entries name of
+          Just i -> (etype, i, 0)
+          Nothing -> findNode entries etype nodeEntries (name ++ ":0")
 
 \end{code}
 
@@ -49,7 +104,7 @@ testingFor =
       ]
       [ -- nodes
          -- |("0", LvConstant (LvDBL 0.00)),| -- ***
-         ("For loop", LvFor forSum)
+         ("For loop", LvStructure LvFor forSum)
       ]
       [ -- wires
          -- |wire "0" "shift reg out",| -- ***
@@ -97,8 +152,8 @@ testingWhile =
          ]
          [ -- nodes
             --("0", LvConstant (LvDBL 0.00)), -- ***
-            ("For", LvFor forSumTimer),
-            ("While", LvWhile whileSumTimer)
+            ("For", LvStructure LvFor forSumTimer),
+            ("While", LvStructure LvWhile whileSumTimer)
          ]
          [ -- wires
             --wire "0" "shift reg out", -- ***
@@ -183,7 +238,7 @@ randomXY =
          [ -- nodes
             ("1000", LvConstant (LvDBL 1000.00)),
             ("Delay * 1000", LvFunction "*"),
-            ("For", LvFor (makeVI
+            ("For", LvStructure LvFor (makeVI
                [ -- controls
                   ("i", LvAutoControl),
                   ("N", LvTunControl),
@@ -265,9 +320,9 @@ testingSeq =
       [ -- indicators
       ]
       [ -- nodes
-         ("step1", LvSequence step1),
-         ("step2", LvSequence stepN),
-         ("step3", LvSequence stepN)
+         ("step1", LvStructure LvSequence step1),
+         ("step2", LvStructure LvSequence stepN),
+         ("step3", LvStructure LvSequence stepN)
       ]
       [ -- wires
          wire "step1:NEXT" "step2:GO",
@@ -286,7 +341,7 @@ step1 =
          ("NEXT", LvTunIndicator LvLastValue)
       ]
       [ -- nodes
-         ("For", LvFor forSumTimer)
+         ("For", LvStructure LvFor forSumTimer)
       ]
       [ -- wires
          wire "count" "For:N"
@@ -303,7 +358,7 @@ stepN =
          ("out", LvTunIndicator LvLastValue)
       ]
       [ -- nodes
-         ("For", LvFor forSumTimer)
+         ("For", LvStructure LvFor forSumTimer)
       ]
       [ -- wires
          wire "count" "For:N",
@@ -325,7 +380,7 @@ testingCase =
       ]
       [ -- nodes
          ("3", LvConstant (LvI32 3)),
-         ("for", LvFor (makeVI
+         ("for", LvStructure LvFor (makeVI
             [ -- controls
                ("i", LvAutoControl),
                ("N", LvTunControl)
@@ -416,7 +471,7 @@ testingNestedFor =
       ]
       [ -- nodes
          ("outer 3", LvConstant (LvI32 3)),
-         ("outer for", LvFor (makeVI
+         ("outer for", LvStructure LvFor (makeVI
             [ -- controls
                ("i", LvAutoControl),
                ("N", LvTunControl)
@@ -426,7 +481,7 @@ testingNestedFor =
             ]
             [ -- nodes
                ("inner 3", LvConstant (LvI32 3)),
-               ("inner for", LvFor (makeVI
+               ("inner for", LvStructure LvFor (makeVI
                   [ -- controls
                      ("i", LvAutoControl),
                      ("N", LvTunControl)
