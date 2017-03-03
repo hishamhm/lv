@@ -47,8 +47,8 @@ local state_grammar = re.compile([[
    LvElemAddr <- { '{' {:type: LvElemType :} ' ' {:port: Int :} '}' }
 
    LvNodeState <- 'LvNodeState {' {|
-      {:cont:   nsCont :} ', '
-      {:inputs: nsInputs :}
+      {:inputs: nsInputs :} ', '
+      {:cont:   nsCont :}
    |} '}'
 
    nsCont <- 'nsCont = ' Maybe_LvCont

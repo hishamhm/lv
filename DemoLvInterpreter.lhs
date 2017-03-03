@@ -27,7 +27,7 @@ main =
    do
       print program
       loop (initialState 0 program) program
-         where program = testingCase
+         where program = testingFor
 
 data LvStringWire = LvStringWire String String
    deriving Show
@@ -54,10 +54,10 @@ makeVI controls indicators nodes stringWires =
       convert :: LvStringWire -> LvWire      
       convert (LvStringWire src dst) =
          let
-            (srcType,  srcNode,  srcPort')  = findNode controls    LvC  vIndicators  src
-            (dstType,  dstNode,  dstPort')  = findNode indicators  LvI  vControls    dst
+            (srcType,  srcElem,  srcPort')  = findElem controls    LvC  vIndicators  src
+            (dstType,  dstElem,  dstPort')  = findElem indicators  LvI  vControls    dst
          in
-            LvWire (LvPortAddr srcType srcNode srcPort') (LvPortAddr dstType dstNode dstPort')
+            LvWire (LvPortAddr srcType srcElem srcPort') (LvPortAddr dstType dstElem dstPort')
 
       findIndex :: [(String, a)] -> String -> Maybe Int
       findIndex es name = elemIndex name $ map fst es
@@ -65,51 +65,52 @@ makeVI controls indicators nodes stringWires =
       must :: (String -> Maybe a) -> String -> a
       must fn name = fromMaybe (error ("No such entry " ++ name)) (fn name)
 
-      findNode ::  [(String, a)] -> LvNodeType -> (LvVI -> [(String, b)])
-                   -> String -> (LvNodeType, Int, Int)
-      findNode entries etype nodeEntries name
+      findElem ::  [(String, a)] -> LvElemType -> (LvVI -> [(String, b)])
+                   -> String -> (LvElemType, Int, Int)
+      findElem entries etype elemEntries name
        | isJust $ find (== ':') name =
             let 
-               [nodeName, portName] = splitOn ":" name
-               node = (must . flip lookup) nodes nodeName
-               findPort (LvStructure _ subVi)  = must $ findIndex (nodeEntries subVi)
-               findPort (LvCase subVis)        = must $ findIndex (nodeEntries (head subVis))
+               [elemName, portName] = splitOn ":" name
+               elem = (must . flip lookup) nodes elemName
+               findPort (LvStructure _ subVi)  = must $ findIndex (elemEntries subVi)
+               findPort (LvCase subVis)        = must $ findIndex (elemEntries (head subVis))
                findPort (LvFunction _)         = \s -> if null s then 0 else read s
                findPort _                      = \s -> 0
             in
-               (LvN, (must . findIndex) nodes nodeName, findPort node portName)
+               (LvN, (must . findIndex) nodes elemName, findPort elem portName)
        | otherwise =
           case findIndex entries name of
           Just i -> (etype, i, 0)
-          Nothing -> findNode entries etype nodeEntries (name ++ ":0")
+          Nothing -> findElem entries etype elemEntries (name ++ ":0")
 
 \end{code}
 
-\section{A for-loop}
+\section{Concurrent for-loops}
 
-On continuous run, running this with 0 in the input produces 0, incrementing
-to 1 it remains at 0, and incrementing to 2 it increments the output forever.
-This is due to the shift register. Uncommenting the node and the wire that are
-marked *** stops the endless increment, but it busy-waits.
+This example demonstrates two structures running concurrently. Two identical
+for-loops run with different inputs.
 
 \begin{code}
 
 testingFor =
    makeVI
       [ -- controls
-         ("input", LvControl (LvDBL 10.0))
+         ("input 1", LvControl (LvDBL 10.0)),
+         ("input 2", LvControl (LvDBL 20.0))
       ]
       [ -- indicators
-         ("output", LvIndicator (LvDBL (-999.0)))
+         ("output 1", LvIndicator (LvDBL (-999.0))),
+         ("output 2", LvIndicator (LvDBL (-999.0)))
       ]
       [ -- nodes
-         -- |("0", LvConstant (LvDBL 0.00)),| -- ***
-         ("For loop", LvStructure LvFor forSum)
+         ("For loop 1", LvStructure LvFor forSum),
+         ("For loop 2", LvStructure LvFor forSum)
       ]
       [ -- wires
-         -- |wire "0" "shift reg out",| -- ***
-         wire "input"         "For loop:N",
-         wire "For loop:out"  "output"
+         wire "input 1"         "For loop 1:N",
+         wire "For loop 1:out"  "output 1",
+         wire "input 2"         "For loop 2:N",
+         wire "For loop 2:out"  "output 2"
       ]
 
 forSum =

@@ -203,6 +203,12 @@ four primitive data types (floating-point and integer numbers, string and
 boolean), the \emph{cluster} type, which implements a heterogeneous tuple of
 values (working like a record or "struct"), and homogeneous arrays.
 
+We chose to implement only one floating-point and one integer type. Besides
+the types listed here, LabVIEW includes the following numeric types in total:
+extended and single-precision floating-point numbers; fixed-point numbers;
+signed and unsigned integers of 8, 16, 32 and 64 bits; single, double and
+extended-precision complex numbers.
+
 Unlike LabVIEW, our implementation allows arbitrarily recursive types (e.g. we
 support a cluster of arrays of arrays of clusters). Since we assume that
 programs entered in the output are properly type-checked, implementing the
@@ -221,11 +227,12 @@ data LvValue  =  LvDBL Double
 
 \end{code}
 
-We chose to implement only one floating-point and one integer type. Besides
-the types listed above, LabVIEW includes the following numeric types in total:
-extended and single-precision floating-point numbers; fixed-point numbers;
-signed and unsigned integers of 8, 16, 32 and 64 bits; single, double and
-extended-precision complex numbers.
+A wire is a connection between two objects, represented as a
+source-destination pair of port addresses. Each port address, denoted
+|LvPortAddr t e p| is a triple containing the element type (control, indicator
+or node), the element index and the port index within the element. For the
+source tuple, the port index denotes the element's output port; for the
+destination tuple, it denotes the input port. 
 
 \begin{code}
 
@@ -235,45 +242,81 @@ data LvWire =  LvWire {
                }
    deriving Show
 
-data LvPortAddr = LvPortAddr LvNodeType Int Int
+data LvPortAddr = LvPortAddr LvElemType Int Int
    deriving Eq
 
-data LvNodeType  =  LvN
-                 |  LvC
+data LvElemType  =  LvC
                  |  LvI
+                 |  LvN
    deriving (Show, Eq)
 
 \end{code}
 
 \section{Representation of state}
 
+The representation of a state in our interpreter is a structure containing the
+following values: the timestamp, a scheduler queue listing the next elements
+that need to be processed, and three sequences that store the internal states
+of nodes, controls and indicators. For controls and indicators, the sequences
+store their values, if present.
+
 \begin{code}
 
-{-"\hypertarget{LvState}{}"-}
+-- ** {-"\hypertarget{LvState}{}"-}
 data LvState =  LvState { 
                    sTs :: Int,
-                   sSched :: [LvNodeAddr],
+                   sSched :: [LvElemAddr],
                    sNodeStates :: Seq LvNodeState,
                    sControlValues :: Seq (Maybe LvValue),
                    sIndicatorValues :: Seq (Maybe LvValue)
                 }
    deriving Show
 
-data LvNodeAddr = LvNodeAddr LvNodeType Int
+data LvElemAddr = LvElemAddr LvElemType Int
    deriving Eq
 
+\end{code}
+
+For node states, the interpreter stores the contents of the input ports and an
+optional continuation. Each input port may be either empty or contain a single
+value, in accordance with the static dataflow model.
+
+\begin{code}
+
 data LvNodeState =  LvNodeState {
-                       nsName :: String,
-                       nsCont :: Maybe LvCont,
-                       nsInputs :: Seq (Maybe LvValue)
+                       nsInputs :: Seq (Maybe LvValue),
+                       nsCont :: Maybe LvCont
                     }
    deriving Show
+
+\end{code}
+
+For functions, we use continuations to model computations that run over time.
+An operation that needs to continue running beyond the current timestamp
+implements the rest of the computation as a separate function, that will be
+scheduled to run at the next time tick. In the |LvKFunction| constructor we
+store the continuation function itself (|kFn|) and the values that will be
+passed to it (|kArgs|). These values act as the operation's internal memory.
+
+For subgraph structures, such as loops, the continuation of its execution is
+the state of the sub-VI. Note that, this way, the interpreter models a
+hierarchical tree of scheduler queues, as each structure node keeps an
+|LvState| with its own |sSched| queue. This way, multiple subgraphs can run
+concurrently.
+
+\begin{code}
 
 data LvCont  =  LvKFunction {
                    kFn :: LvVisibleState -> [LvValue] -> LvReturn,
                    kArgs :: [LvValue]
                 }
              |  LvKState LvState
+
+\end{code}
+
+TODO
+
+\begin{code}
  
 data LvVisibleState  =  LvVisibleState {
                            vsTs :: Int
@@ -289,11 +332,11 @@ data LvReturn  =  LvReturn [LvValue]
 \begin{code}
 
 instance Show LvPortAddr where
-   show (LvPortAddr typ nidx pidx) =
-      "{" ++ show typ ++ " " ++ show nidx ++ ", " ++ show pidx ++ "}"
+   show (LvPortAddr typ eidx pidx) =
+      "{" ++ show typ ++ " " ++ show eidx ++ ", " ++ show pidx ++ "}"
 
-instance Show LvNodeAddr where
-   show (LvNodeAddr typ nidx) = "{" ++ show typ ++ " " ++ show nidx ++ "}"
+instance Show LvElemAddr where
+   show (LvElemAddr typ eidx) = "{" ++ show typ ++ " " ++ show eidx ++ "}"
 
 instance Show LvCont where
    show (LvKFunction _ args) = "KFunction(" ++ show args ++ ")"
@@ -338,13 +381,13 @@ run (LvState ts (q:qs) nstates cvs ivs) mainVi =
 
 \begin{code}
 
-runEvent :: LvNodeAddr -> LvState -> LvVI -> LvState
-runEvent (LvNodeAddr LvC idx) state0 mainVi =
+runEvent :: LvElemAddr -> LvState -> LvVI -> LvState
+runEvent (LvElemAddr LvC idx) state0 mainVi =
    fire mainVi (fromMaybe undefined $ index cvs idx) (LvPortAddr LvC idx 0) state0
    where
       cvs = sControlValues state0
 
-runEvent (LvNodeAddr LvN idx) state0 mainVi =
+runEvent (LvElemAddr LvN idx) state0 mainVi =
    let
       nstates = sNodeStates state0
       nstate = index nstates idx
@@ -371,7 +414,7 @@ runEvent (LvNodeAddr LvN idx) state0 mainVi =
 emptyInputs :: Int -> Seq (Maybe LvValue)
 emptyInputs n = fromList (replicate n Nothing)
 
-updateNode :: Int -> LvState -> LvNodeState -> [LvNodeAddr] -> LvState
+updateNode :: Int -> LvState -> LvNodeState -> [LvElemAddr] -> LvState
 updateNode idx st newNstate newSched =
    st {
       sTs = sTs st + 1,
@@ -424,7 +467,7 @@ propagate value vi (LvPortAddr LvN dnode dport) state =
       sched' =
          let
             sched = sSched state
-            entry = LvNodeAddr LvN dnode
+            entry = LvElemAddr LvN dnode
          in
             if shouldSchedule (snd $ vNodes vi !! dnode) inputs' && entry `notElem` sched
             then sched ++ [entry]
@@ -486,7 +529,7 @@ runNode (LvFunction name) state1 inputs idx =
             state2 = updateNode idx state1 nstate{ nsCont = Nothing } []
             pvs = zip (indices outVals) outVals
       LvContinue k' ->
-         (updateNode idx state1 nstate{ nsCont = Just k' } [LvNodeAddr LvN idx], [])
+         (updateNode idx state1 nstate{ nsCont = Just k' } [LvElemAddr LvN idx], [])
 
 runNode (LvConstant value) state1 _ _ =
    trc ("firing constant " ++ shw value) $
@@ -580,13 +623,14 @@ runStructure subVi initState shouldStop state1 idx inputs =
    let
       nstates = sNodeStates state1
       nstate = index nstates idx
+      ts' = sTs state1 + 1
 
       statek = 
          case nsCont nstate of
          Nothing -> initState
                     $ feedInputsToVI inputs
-                    $ initialState (sTs state1 + 1) subVi
-         Just (LvKState st) -> st
+                    $ initialState ts' subVi
+         Just (LvKState st) -> st { sTs = ts' }
       statek'@(LvState _ qk _ _ _) = run statek subVi
       nextk
          | not $ null qk      = trc ("GOT QK " ++ shw qk ++ " IN STATEK " ++ shw statek) $ Just (LvKState statek')
@@ -597,7 +641,7 @@ runStructure subVi initState shouldStop state1 idx inputs =
               Just (LvKState (nextStep subVi statek' (i + 1)))
          where (LvI32 i) = getControl statek' iIndex undefined
       nstate' = nstate { nsCont = nextk }
-      qMe = trc ("QUEUED MYSELF? " ++ (shw $ isJust nextk) ++ "(LvN " ++ shw idx ++ ")") $ [LvNodeAddr LvN idx | isJust nextk]
+      qMe = trc ("QUEUED MYSELF? " ++ (shw $ isJust nextk) ++ "(LvN " ++ shw idx ++ ")") $ [LvElemAddr LvN idx | isJust nextk]
       state2 = state1 {
          sTs = sTs statek' + 1,
          sSched = sSched state1 ++ qMe,
@@ -645,9 +689,10 @@ initialState ts vi =
    }
    where
       makeNodeState :: (Int, (String, LvNode)) -> LvNodeState
-      makeNodeState (i, (name, node)) = LvNodeState  name Nothing
-                                                     (emptyInputs $ nrInputs i node)
-
+      makeNodeState (i, (name, node)) = LvNodeState {
+                                           nsInputs  = emptyInputs $ nrInputs i node,
+                                           nsCont    = Nothing 
+                                        }
       nrInputs :: Int -> LvNode -> Int
       nrInputs i (LvFunction _)         = nrConnectedInputs i vi
       nrInputs _ (LvConstant _)         = 0
@@ -674,10 +719,10 @@ node given in the description of LvVI, but LabVIEW does not specify it.
 \begin{code}
 
 -- FIXME schedule while loop
-initialSchedule :: LvVI -> [LvNodeAddr]
+initialSchedule :: LvVI -> [LvElemAddr]
 initialSchedule vi = 
-   map (LvNodeAddr LvC) (indices $ vControls vi)
-   ++ map (LvNodeAddr LvN) (filter  (\i -> isBootNode i (vNodes vi !! i))
+   map (LvElemAddr LvC) (indices $ vControls vi)
+   ++ map (LvElemAddr LvN) (filter  (\i -> isBootNode i (vNodes vi !! i))
                                     (indices $ vNodes vi))
    where
       isBootNode _ (_, LvConstant _) = True
