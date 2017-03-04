@@ -25,9 +25,9 @@ import Data.List.Split
 
 main = 
    do
-      print program
-      loop (initialState 0 program) program
-         where program = testingFor
+      print vi
+      runVI vi
+         where vi = testingFor
 
 data LvStringWire = LvStringWire String String
    deriving Show

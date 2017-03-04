@@ -17,10 +17,12 @@
 
 \begin{document}
 
-\title{An interpreter modelling the semantics of LabVIEW}
+\title{An interpreter modeling the semantics of LabVIEW}
 \author{Hisham Muhammad}
 
 \maketitle{}
+
+\section{Introduction}
 
 This is an interpreter designed to model the core semantics of LabVIEW,
 with a focus on the interesting features of its dataflow language.
@@ -36,8 +38,6 @@ material for the interested reader. The source code in @.lhs@ format
 %BEGIN LYX TEXT
 
 This implementation uses only standard modules included in the Haskell Platform:
-
-\section{Introduction}
 
 \begin{code}
 
@@ -168,18 +168,7 @@ and sub-VIs. The case-structure controls a list of sub-VIs, and for this
 reason is handled separately with the |LvCase| constructor.
 
 A feedback node holds the value it receives through its input port and fires
-it the next time the program is executed. This means that, in practice, it 
-acts like a shift register when the program is launched in "continuous mode",
-which is a mode of execution equivalent to enclosing the entire program in an
-infinite loop.
-
-The LabVIEW UI enforces that the only connections producing explicit cycles in
-the graph are those connecting feedback nodes: wiring objects in a graph
-producing a cycle automatically inserts a feedback node. This keeps the
-dataflow model of LabVIEW static: each execution of a graph executes
-acyclically. Implicit cycles can be produced in loop structures through the
-use of shift registers, but shift registers are only triggered after each
-iteration of a subgraph executes completely.
+it the next time the program is executed.
 
 \begin{code}
 
@@ -353,17 +342,33 @@ data LvVisibleState  =  LvVisibleState {
 
 \end{code}
 
-\section{Main loop}
+\section{Execution}
+
+The execution mode of LabVIEW is data-driven. The user enters data via
+controls, which propagate their values through other nodes, eventually
+reaching indicators, which provide feedback to the user via their
+representations in the front panel.
+
+This interpreter models a single-shot execution (as discussed in Section
+\ref{sub:LabVIEW-execution-modes}). Continuous execution is semantically
+equivalent as enclosing the entire VI in a while-loop.
+
+\subsection{Main loop}
+
+The execution of the interpreter is a loop of evaluation steps, which
+runs until the scheduler queue is empty.
 
 \begin{code}
 
-loop :: LvState -> LvVI -> IO ()
-loop state@(LvState _ q _ _ _) program =
-   do
-      print state
-      case q of
-       []  -> return ()
-       _   -> loop (run state program) program 
+runVI :: LvVI -> IO ()
+runVI vi =
+   loop (initialState 0 vi)
+   where
+      loop state = do
+         print state
+         case sSched state of
+          []  -> return ()
+          _   -> loop (run state vi)
 
 \end{code}
 
@@ -380,10 +385,6 @@ run (LvState ts (q:qs) nstates cvs ivs) mainVi =
       runEvent q state0 mainVi
 
 \end{code}
-
-\section{Objects and structures}
-
-\subsection{Firing data to objects}
 
 \begin{code}
 
@@ -429,6 +430,8 @@ updateNode idx st newNstate newSched =
    }
 
 \end{code}
+
+\subsection{Firing data to objects}
 
 \begin{code}
 
@@ -510,7 +513,7 @@ shouldScheduleSubVI vi inputs =
 
 \end{code}
 
-\subsection{Nodes}
+\section{Nodes and structures}
 
 \begin{code}
 
@@ -727,7 +730,6 @@ node given in the description of LvVI, but LabVIEW does not specify it.
 
 \begin{code}
 
--- FIXME schedule while loop
 initialSchedule :: LvVI -> [LvElemAddr]
 initialSchedule vi = 
    map (LvElemAddr LvC) (indices $ vControls vi)
@@ -736,7 +738,10 @@ initialSchedule vi =
    where
       isBootNode _ (_, LvConstant _) = True
       isBootNode _ (_, LvFeedbackNode _) = True
-      isBootNode i (_, LvFunction _) | nrConnectedInputs i vi == 0 = True
+      isBootNode i (_, LvFunction _)              | nrConnectedInputs i vi == 0 = True
+      isBootNode i (_, LvStructure LvWhile _)     | nrConnectedInputs i vi == 0 = True
+      isBootNode i (_, LvStructure LvSubVI _)     | nrConnectedInputs i vi == 0 = True
+      isBootNode i (_, LvStructure LvSequence _)  | nrConnectedInputs i vi == 0 = True
       isBootNode _ _ = False
 
 feedInputsToVI :: [Maybe LvValue] -> LvState -> LvState
