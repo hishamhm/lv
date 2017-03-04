@@ -245,6 +245,10 @@ data LvWire =  LvWire {
 data LvPortAddr = LvPortAddr LvElemType Int Int
    deriving Eq
 
+instance Show LvPortAddr where
+   show (LvPortAddr typ eidx pidx) =
+      "{" ++ show typ ++ " " ++ show eidx ++ ", " ++ show pidx ++ "}"
+
 data LvElemType  =  LvC
                  |  LvI
                  |  LvN
@@ -275,6 +279,10 @@ data LvState =  LvState {
 data LvElemAddr = LvElemAddr LvElemType Int
    deriving Eq
 
+instance Show LvElemAddr where
+   show (LvElemAddr typ eidx) =
+      "{" ++ show typ ++ " " ++ show eidx ++ "}"
+
 \end{code}
 
 For node states, the interpreter stores the contents of the input ports and an
@@ -297,6 +305,10 @@ implements the rest of the computation as a separate function, that will be
 scheduled to run at the next time tick. In the |LvKFunction| constructor we
 store the continuation function itself (|kFn|) and the values that will be
 passed to it (|kArgs|). These values act as the operation's internal memory.
+A continuation function returns either |LvReturn|, which contains the result
+values to be sent through the function's output ports, or |LvContinue|, which
+encapsulates the next continuation to be executed as the operation resumes
+running.
 
 For subgraph structures, such as loops, the continuation of its execution is
 the state of the sub-VI. Note that, this way, the interpreter models a
@@ -312,38 +324,32 @@ data LvCont  =  LvKFunction {
                 }
              |  LvKState LvState
 
-\end{code}
-
-TODO
-
-\begin{code}
- 
-data LvVisibleState  =  LvVisibleState {
-                           vsTs :: Int
-                        }
+instance Show LvCont where
+   show (LvKFunction _ args)  = "KFunction(" ++ show args ++ ")"
+   show (LvKState state)      = "KState[" ++ show state ++ "]"
 
 data LvReturn  =  LvReturn [LvValue]
                |  LvContinue LvCont
 
 \end{code}
 
-\section{Utilities}
+In all functions implementing LabVIEW nodes, we add an additional argument
+representing read access to the external world, which we call "visible state".
+In our model, the visible state consists only of the execution timestamp,
+which we will use below as a model of a "system clock" for timer-based
+functions.
+
+This is a simplified model since it implements a read-only view of the
+external world, but it allows us to model impure functions whose effects
+depend not only on the inputs received through wires in the dataflow graph. In
+particular, this allows us to model the relationship between graph evaluation
+and time.
 
 \begin{code}
-
-instance Show LvPortAddr where
-   show (LvPortAddr typ eidx pidx) =
-      "{" ++ show typ ++ " " ++ show eidx ++ ", " ++ show pidx ++ "}"
-
-instance Show LvElemAddr where
-   show (LvElemAddr typ eidx) = "{" ++ show typ ++ " " ++ show eidx ++ "}"
-
-instance Show LvCont where
-   show (LvKFunction _ args) = "KFunction(" ++ show args ++ ")"
-   show (LvKState state) = "KState[" ++ show state ++ "]"
-
-indices :: [a] -> [Int]
-indices l = [0 .. (length l - 1)]
+ 
+data LvVisibleState  =  LvVisibleState {
+                           vsTs :: Int
+                        }
 
 \end{code}
 
@@ -489,6 +495,9 @@ shouldSchedule node inputs =
          False
       _ ->
          isNothing $ elemIndexL Nothing inputs
+
+indices :: [a] -> [Int]
+indices l = [0 .. (length l - 1)]
 
 shouldScheduleSubVI :: LvVI -> Seq (Maybe LvValue) -> Bool
 shouldScheduleSubVI vi inputs = 
