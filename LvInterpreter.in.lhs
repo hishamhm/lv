@@ -43,7 +43,7 @@ This implementation uses only standard modules included in the Haskell Platform:
 
 module LvInterpreter where
 
-import Data.Sequence (Seq, fromList, index, update, mapWithIndex, fromList, elemIndexL)
+import Data.Sequence (Seq, fromList, index, update, elemIndexL)
 import qualified Data.Sequence as Seq (length, take)
 import Data.Char
 import Data.List
