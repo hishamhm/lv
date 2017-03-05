@@ -218,7 +218,7 @@ data LvValue  =  LvDBL Double
 
 A wire is a connection between two objects, represented as a
 source-destination pair of port addresses. Each port address, denoted
-|LvPortAddr t e p| is a triple containing the element type (control, indicator
+|LvPortAddr t e p|, is a triple containing the element type (control, indicator
 or node), the element index and the port index within the element. For the
 source tuple, the port index denotes the element's output port; for the
 destination tuple, it denotes the input port. 
@@ -355,8 +355,9 @@ equivalent as enclosing the entire VI in a while-loop.
 
 \subsection{Main loop}
 
-The execution of the interpreter is a loop of evaluation steps, which
-runs until the scheduler queue is empty.
+The execution of the interpreter is a loop of evaluation steps, which starts
+from an initial state defined for the VI and runs producing new states until a
+final state with an empty scheduler queue is produced.
 
 \begin{code}
 
@@ -372,17 +373,91 @@ runVI vi =
 
 \end{code}
 
+\subsection{Initial state}
+
+The initial state consists of the input values entered for controls,
+the initial values of indicators, and empty states for each node, containing
+the appropriate number of empty slots corresponding to their input ports.
+It also contains the initial schedule, which is the initial list of graph
+elements to be executed.
+
+\begin{code}
+
+initialState :: Int -> LvVI -> LvState
+initialState ts vi = 
+   LvState {
+      sTs               = ts + 1,
+      sControlValues    = fromList $ map (makeControlValue . snd)    (vControls vi),
+      sIndicatorValues  = fromList $ map (makeIndicatorValue . snd)  (vIndicators vi),
+      sNodeStates       = fromList $ mapIdx makeNodeState            (vNodes vi),
+      sSched            = initialSchedule vi
+   }
+   where
+      makeNodeState :: (Int, (String, LvNode)) -> LvNodeState
+      makeNodeState (i, (name, node)) =  LvNodeState {
+                                            nsInputs  = emptyInputs $ nrInputs i node,
+                                            nsCont    = Nothing 
+                                         }
+      nrInputs :: Int -> LvNode -> Int
+      nrInputs i (LvFunction _)         = nrConnectedInputs i vi
+      nrInputs _ (LvConstant _)         = 0
+      nrInputs _ (LvStructure _ subVi)  = length $ vControls subVi
+      nrInputs _ (LvCase subVis)        = length $ vControls (head subVis)
+      nrInputs _ (LvFeedbackNode _)     = 1
+
+      makeControlValue :: LvControl -> Maybe LvValue
+      makeControlValue (LvControl    v)  = Just v
+      makeControlValue (LvSRControl  v)  = Just v
+      makeControlValue _                 = Nothing
+      makeIndicatorValue :: LvIndicator -> Maybe LvValue
+      makeIndicatorValue (LvIndicator v)  = Just v
+      makeIndicatorValue _                = Nothing
+      
+      mapIdx :: ((Int, a) -> b) -> [a] -> [b]
+      mapIdx fn l = zipWith (curry fn) (indices l) l
+
+\end{code}
+
+The initial schedule is defined as follows. All controls, constants and
+feedback nodes are queued. Then, all function and structure nodes which do not
+depend on other inputs are queued as well. Here, we make a simplifcation and
+assume that VIs do not have any functions with mandatory inputs missing. This
+could be verified in a type-checking step prior to execution.
+
+Note also that the code below implies the initial schedule follows the order
+of node given in the description of the |LvVI| record, leading to a
+deterministic execution of our intpreter. LabVIEW does not specify a
+particular order.
+
+\begin{code}
+
+initialSchedule :: LvVI -> [LvElemAddr]
+initialSchedule vi = 
+   map (LvElemAddr LvC) (indices $ vControls vi)
+   ++ map (LvElemAddr LvN) (filter  (\i -> isBootNode i (vNodes vi !! i))
+                                    (indices $ vNodes vi))
+   where
+      isBootNode _ (_, LvConstant _) = True
+      isBootNode _ (_, LvFeedbackNode _) = True
+      isBootNode i (_, LvFunction _)              | nrConnectedInputs i vi == 0 = True
+      isBootNode i (_, LvStructure LvWhile _)     | nrConnectedInputs i vi == 0 = True
+      isBootNode i (_, LvStructure LvSubVI _)     | nrConnectedInputs i vi == 0 = True
+      isBootNode i (_, LvStructure LvSequence _)  | nrConnectedInputs i vi == 0 = True
+      isBootNode _ _ = False
+
+\end{code}
+
+\subsection{Event processing}
+
 \begin{code}
 
 run :: LvState -> LvVI -> LvState
 
 run state@(LvState _ [] _ _ _) _ = state
 
-run (LvState ts (q:qs) nstates cvs ivs) mainVi =
-   let
-      state0 = LvState (ts + 1) qs nstates cvs ivs
-   in
-      runEvent q state0 mainVi
+run state@(LvState ts (q:qs) _ _ _) mainVi =
+   let  state0 = state { sTs = ts + 1, sSched = qs }
+   in   runEvent q state0 mainVi
 
 \end{code}
 
@@ -689,60 +764,6 @@ nrConnectedInputs idx vi =
 \end{code}
 
 \begin{code}
-
-initialState :: Int -> LvVI -> LvState
-initialState ts vi = 
-   LvState {
-      sTs               = ts + 1,
-      sSched            = initialSchedule vi,
-      sNodeStates       = fromList $ mapIdx makeNodeState            (vNodes vi),
-      sControlValues    = fromList $ map (makeControlValue . snd)    (vControls vi),
-      sIndicatorValues  = fromList $ map (makeIndicatorValue . snd)  (vIndicators vi)
-   }
-   where
-      makeNodeState :: (Int, (String, LvNode)) -> LvNodeState
-      makeNodeState (i, (name, node)) = LvNodeState {
-                                           nsInputs  = emptyInputs $ nrInputs i node,
-                                           nsCont    = Nothing 
-                                        }
-      nrInputs :: Int -> LvNode -> Int
-      nrInputs i (LvFunction _)         = nrConnectedInputs i vi
-      nrInputs _ (LvConstant _)         = 0
-      nrInputs _ (LvStructure _ subVi)  = length $ vControls subVi
-      nrInputs _ (LvCase subVis)        = length $ vControls (head subVis)
-      nrInputs _ (LvFeedbackNode _)     = 1
-
-      makeControlValue :: LvControl -> Maybe LvValue
-      makeControlValue (LvControl    v)  = Just v
-      makeControlValue (LvSRControl  v)  = Just v
-      makeControlValue _                 = Nothing
-      makeIndicatorValue :: LvIndicator -> Maybe LvValue
-      makeIndicatorValue (LvIndicator v)  = Just v
-      makeIndicatorValue _                = Nothing
-      
-      mapIdx :: ((Int, a) -> b) -> [a] -> [b]
-      mapIdx fn l = zipWith (curry fn) (indices l) l
-
-\end{code}
-
-Note that the code below implies the initial schedule follows the order of
-node given in the description of LvVI, but LabVIEW does not specify it.
-
-\begin{code}
-
-initialSchedule :: LvVI -> [LvElemAddr]
-initialSchedule vi = 
-   map (LvElemAddr LvC) (indices $ vControls vi)
-   ++ map (LvElemAddr LvN) (filter  (\i -> isBootNode i (vNodes vi !! i))
-                                    (indices $ vNodes vi))
-   where
-      isBootNode _ (_, LvConstant _) = True
-      isBootNode _ (_, LvFeedbackNode _) = True
-      isBootNode i (_, LvFunction _)              | nrConnectedInputs i vi == 0 = True
-      isBootNode i (_, LvStructure LvWhile _)     | nrConnectedInputs i vi == 0 = True
-      isBootNode i (_, LvStructure LvSubVI _)     | nrConnectedInputs i vi == 0 = True
-      isBootNode i (_, LvStructure LvSequence _)  | nrConnectedInputs i vi == 0 = True
-      isBootNode _ _ = False
 
 feedInputsToVI :: [Maybe LvValue] -> LvState -> LvState
 feedInputsToVI inputs state =
