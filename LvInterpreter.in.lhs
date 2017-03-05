@@ -463,15 +463,16 @@ run :: LvState -> LvVI -> LvState
 
 run state@(LvState _ [] _ _ _) _ = state
 
-run state@(LvState ts (q:qs) _ _ _) mainVi =
+run state@(LvState ts (q:qs) _ _ _) vi =
    let  state0 = state { sTs = ts + 1, sSched = qs }
-   in   runEvent q state0 mainVi
+   in   runEvent q state0 vi
 
 \end{code}
 
-An event is identified by the graph element that is to be executed. Function
-|runEvent| takes a |LvElemAddr| that identifies the element in the VI, a state
-and a VI, and produces a new state:
+An event in the queue indicates the graph element to be executed next.
+Function |runEvent| takes a |LvElemAddr| that identifies the element, a state
+and a VI, and produces a new state, with the results of triggering that
+element:
 
 \begin{code}
 
@@ -479,37 +480,50 @@ runEvent :: LvElemAddr -> LvState -> LvVI -> LvState
 
 \end{code}
 
-
+When triggering a control, its effect is to fire its value through its output port.
 
 \begin{code}
 
-runEvent (LvElemAddr LvC idx) state0 mainVi =
-   fire mainVi cv (LvPortAddr LvC idx 0) state0
+runEvent (LvElemAddr LvC idx) state0 vi =
+   fire vi cv (LvPortAddr LvC idx 0) state0
    where
       cv = index (sControlValues state0) idx
 
-runEvent (LvElemAddr LvN idx) state0 mainVi =
-   let
-      nstates = sNodeStates state0
-      nstate = index nstates idx
+\end{code}
+
+When triggering a node, the interpreter consumes the input values for the
+node from the state, runs the |runNode| operation for the appropriate
+type of node, and produces a new state and a list of values to be fired to its
+output ports.
+
+To determine the input state (|state1|) and input values (|inputs|) for the
+|runNode| function, |runEvent| checks if the node has a pending continuation
+(|k|). If it has a pending continuation, inputs are obtained from the
+continuation's |LvKFunction| object. If there is no pending continuation,
+the node state is cleared prior to passing it to |runNode|.
+
+\begin{code}
+
+runEvent (LvElemAddr LvN idx) state0 vi =
+   trc ("runEvent (LVN, " ++ shw idx ++ ") ON STATE " ++ shw state0 ++ " FOR VI " ++ shw vi) $
+   foldl' (\s (p, v) -> fire vi v (LvPortAddr LvN idx p) s) state2 pvs
+   where
+      nstate = index (sNodeStates state0) idx
       k = nsCont nstate
-      clearState = nstate { nsInputs = clear }
-                   where clear = emptyInputs $ Seq.length $ nsInputs nstate
       state1 =
-         if isNothing k
-         then updateNode idx state0 clearState []
-         else state0
-      inputs =
-         trc ("CHECK INPUTS (LVN, " ++ shw idx ++ ") ON STATE " ++ shw state0 ++ " FOR VI " ++ shw mainVi ++ " WITH K " ++ shw k) $
          case k of
-         Nothing -> toList (nsInputs nstate)
-         Just (LvKFunction _ kargs) -> map Just kargs
-         Just (LvKState _) -> undefined
-      (_, node) = vNodes mainVi !! idx
-      (state2, pvs) = runNode node state1 inputs idx
-   in
-      trc ("runEvent (LVN, " ++ shw idx ++ ") ON STATE " ++ shw state0 ++ " FOR VI " ++ shw mainVi) $
-      foldl' (\s (p, v) -> fire mainVi v (LvPortAddr LvN idx p) s) state2 pvs
+         Nothing  -> updateNode idx state0 clearState []
+                     where
+                        clearState = nstate { nsInputs = clear }
+                        clear = emptyInputs $ Seq.length $ nsInputs nstate
+         Just _   -> state0
+      inputs =
+         trc ("CHECK INPUTS (LVN, " ++ shw idx ++ ") ON STATE " ++ shw state0 ++ " FOR VI " ++ shw vi ++ " WITH K " ++ shw k) $
+         case k of
+         Nothing                     -> toList (nsInputs nstate)
+         Just (LvKFunction _ kargs)  -> map Just kargs
+         Just (LvKState _)           -> undefined
+      (state2, pvs) = runNode (snd $ vNodes vi !! idx) state1 inputs idx
 
 -- Produce a sequence of n empty inputs
 emptyInputs :: Int -> Seq (Maybe LvValue)
