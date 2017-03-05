@@ -34,8 +34,8 @@ local state_grammar = re.compile([[
    sTs              <- 'sTs = ' Int
    sSched           <- 'sSched = ' LvElemAddr_list
    sNodeStates      <- 'sNodeStates = ' Seq_LvNodeState
-   sControlValues   <- 'sControlValues = ' Seq_Maybe_LvValue
-   sIndicatorValues <- 'sIndicatorValues = ' Seq_Maybe_LvValue
+   sControlValues   <- 'sControlValues = ' Seq_LvValue
+   sIndicatorValues <- 'sIndicatorValues = ' Seq_LvValue
 
    LvElemAddr_list    <- '[' {| (LvElemAddr    (',' LvElemAddr)*    )? |} ']'
    LvNodeState_list   <- '[' {| (LvNodeState   (',' LvNodeState)*   )? |} ']'
@@ -43,6 +43,7 @@ local state_grammar = re.compile([[
 
    Seq_LvNodeState   <- 'fromList ' LvNodeState_list
    Seq_Maybe_LvValue <- 'fromList ' Maybe_LvValue_list
+   Seq_LvValue       <- 'fromList ' LvValue_list
 
    LvElemAddr <- { '{' {:type: LvElemType :} ' ' {:port: Int :} '}' }
 
@@ -418,12 +419,14 @@ local function adjust_probes(graph, state, cases)
       node.attributes.label = label_for_edge(node.display, "Indicator", indicator_value)
       local probe = "probe_" .. graph.iindex[i-1]
       node.attributes.fillcolor = "white"
-      if show(graph.nodes[probe].attributes.value) ~= show(indicator_value) then
-         node.attributes.fillcolor = "yellow"
-         update_probe(graph, probe, indicator_value)
-      else
-         update_probe(graph, probe, "Nothing")
-         graph.nodes[probe].attributes.value = indicator_value
+      if graph.nodes[probe] then
+         if show(graph.nodes[probe].attributes.value) ~= show(indicator_value) then
+            node.attributes.fillcolor = "yellow"
+            update_probe(graph, probe, indicator_value)
+         else
+            update_probe(graph, probe, "Nothing")
+            graph.nodes[probe].attributes.value = indicator_value
+         end
       end
    end
    for i, node_state in ipairs(state.node_states) do
@@ -481,7 +484,6 @@ local function process_line(line)
       local state = parse(state_grammar, line)
       local cases = {}
       foreach_node(graph, function(node)
-         print(node.name)
          node.attributes.fillcolor = "white"
       end)
       adjust_probes(graph, state, cases)

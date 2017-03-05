@@ -27,7 +27,7 @@ main =
    do
       print vi
       runVI vi
-         where vi = testingFor
+         where vi = randomXY
 
 data LvStringWire = LvStringWire String String
    deriving Show

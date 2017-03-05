@@ -251,7 +251,8 @@ The representation of a state in our interpreter is a structure containing the
 following values: the timestamp, a scheduler queue listing the next elements
 that need to be processed, and three sequences that store the internal states
 of nodes, controls and indicators. For controls and indicators, the sequences
-store their values, if present.
+store their values. A VI always initializes controls and indicators with
+default values.
 
 \begin{code}
 
@@ -260,8 +261,8 @@ data LvState =  LvState {
                    sTs :: Int,
                    sSched :: [LvElemAddr],
                    sNodeStates :: Seq LvNodeState,
-                   sControlValues :: Seq (Maybe LvValue),
-                   sIndicatorValues :: Seq (Maybe LvValue)
+                   sControlValues :: Seq LvValue,
+                   sIndicatorValues :: Seq LvValue
                 }
    deriving Show
 
@@ -405,13 +406,14 @@ initialState ts vi =
       nrInputs _ (LvCase subVis)        = length $ vControls (head subVis)
       nrInputs _ (LvFeedbackNode _)     = 1
 
-      makeControlValue :: LvControl -> Maybe LvValue
-      makeControlValue (LvControl    v)  = Just v
-      makeControlValue (LvSRControl  v)  = Just v
-      makeControlValue _                 = Nothing
-      makeIndicatorValue :: LvIndicator -> Maybe LvValue
-      makeIndicatorValue (LvIndicator v)  = Just v
-      makeIndicatorValue _                = Nothing
+      makeControlValue :: LvControl -> LvValue
+      makeControlValue (LvControl    v)  = v
+      makeControlValue (LvSRControl  v)  = v
+      makeControlValue _                 = LvI32 0
+      makeIndicatorValue :: LvIndicator -> LvValue
+      makeIndicatorValue (LvIndicator v)                  = v
+      makeIndicatorValue (LvTunIndicator LvAutoIndexing)  = LvArr []
+      makeIndicatorValue _                                = LvI32 0
       
       mapIdx :: ((Int, a) -> b) -> [a] -> [b]
       mapIdx fn l = zipWith (curry fn) (indices l) l
@@ -449,6 +451,12 @@ initialSchedule vi =
 
 \subsection{Event processing}
 
+The main operation of the interpreter consists of taking one entry off the
+scheduler queue, incrementing the timestamp, and triggering the event corresponding
+to that entry. Every time we produce a new state, we increment the timestamp.
+The timestamp, therefore, is not a count of the number of evaluation steps, but
+is a simulation of a system clock, to be used by timer operations.
+
 \begin{code}
 
 run :: LvState -> LvVI -> LvState
@@ -461,13 +469,24 @@ run state@(LvState ts (q:qs) _ _ _) mainVi =
 
 \end{code}
 
+An event is identified by the graph element that is to be executed. Function
+|runEvent| takes a |LvElemAddr| that identifies the element in the VI, a state
+and a VI, and produces a new state:
+
 \begin{code}
 
 runEvent :: LvElemAddr -> LvState -> LvVI -> LvState
+
+\end{code}
+
+
+
+\begin{code}
+
 runEvent (LvElemAddr LvC idx) state0 mainVi =
-   fire mainVi (fromMaybe undefined $ index cvs idx) (LvPortAddr LvC idx 0) state0
+   fire mainVi cv (LvPortAddr LvC idx 0) state0
    where
-      cvs = sControlValues state0
+      cv = index (sControlValues state0) idx
 
 runEvent (LvElemAddr LvN idx) state0 mainVi =
    let
@@ -524,17 +543,17 @@ propagate :: LvValue -> LvVI -> LvPortAddr -> LvState -> LvState
 propagate value vi (LvPortAddr LvI dnode _) state =
    let
       (_, indicator) = vIndicators vi !! dnode
+      arr = index (sIndicatorValues state) dnode
       newValue =
          case indicator of
          LvIndicator _                  -> value
          LvSRIndicator _                -> value
          LvTunIndicator LvLastValue     -> value
-         LvTunIndicator LvAutoIndexing  ->  insertIntoArray (fromMaybe (LvArr [])
-                                            (index (sIndicatorValues state) dnode)) value []
+         LvTunIndicator LvAutoIndexing  -> insertIntoArray arr value []
    in
       state {
          sTs = sTs state + 1,
-         sIndicatorValues = update dnode (Just newValue) (sIndicatorValues state)
+         sIndicatorValues = update dnode newValue (sIndicatorValues state)
       }
 
 propagate value vi (LvPortAddr LvN dnode dport) state =
@@ -647,8 +666,8 @@ runNode (LvStructure LvFor subVi) state1 inputs idx =
          trc (shw (i + 1) ++ " >= " ++ shw n) $
          (i + 1 >= n)
          where
-            (LvI32 i) = getControl st iIndex (LvI32 0)
-            LvI32 n = coerceToInt $ getControl st nIndex (LvI32 0)
+            (LvI32 i) = index (sControlValues st) iIndex
+            LvI32 n = coerceToInt $ index (sControlValues st) nIndex
 
 runNode (LvStructure LvWhile subVi) state1 inputs idx =
    trc ("firing while") $
@@ -657,8 +676,7 @@ runNode (LvStructure LvWhile subVi) state1 inputs idx =
       shouldStop st =
          not test
          where
-            (LvBool test) = getIndicator st testIndex
-                            (error "test boolean in 'while' must be set")
+            (LvBool test) = index (sIndicatorValues st) testIndex
 
 runNode (LvStructure LvSequence vi) state1 inputs idx =
    let
@@ -726,7 +744,7 @@ runStructure subVi initState shouldStop state1 idx inputs =
               trc ("let's go " ++ shw (i + 1)) $
               trc ("before: " ++ shw statek') $
               Just (LvKState (nextStep subVi statek' (i + 1)))
-         where (LvI32 i) = getControl statek' iIndex undefined
+         where (LvI32 i) = index (sControlValues statek') iIndex
       nstate' = nstate { nsCont = nextk }
       qMe = trc ("QUEUED MYSELF? " ++ (shw $ isJust nextk) ++ "(LvN " ++ shw idx ++ ")") $ [LvElemAddr LvN idx | isJust nextk]
       state2 = state1 {
@@ -734,9 +752,7 @@ runStructure subVi initState shouldStop state1 idx inputs =
          sSched = sSched state1 ++ qMe,
          sNodeStates = update idx nstate' nstates
       }
-      pvs = map (\(p,v) -> (p, fromMaybe undefined v))
-            $ filter (\(_,v) -> isJust v)
-            $ zip (indices $ vIndicators subVi) (toList $ sIndicatorValues statek')
+      pvs = zip (indices $ vIndicators subVi) (toList $ sIndicatorValues statek')
    in
       if isJust nextk 
       then (state2, [])
@@ -769,7 +785,7 @@ feedInputsToVI :: [Maybe LvValue] -> LvState -> LvState
 feedInputsToVI inputs state =
    state {
       sTs = sTs state + 1,
-      sControlValues = fromList $ zipWith orElse inputs (toList (sControlValues state))
+      sControlValues = fromList $ zipWith fromMaybe (toList $ sControlValues state) inputs
    }  
 
 iIndex :: Int
@@ -783,7 +799,7 @@ initCounter :: LvState -> LvState
 initCounter state =
    state {
       sTs = sTs state + 1,
-      sControlValues = update iIndex (Just $ LvI32 0) (sControlValues state)
+      sControlValues = update iIndex (LvI32 0) (sControlValues state)
    }
 
 nextStep :: LvVI -> LvState -> Int -> LvState
@@ -794,25 +810,19 @@ nextStep vi state i' =
       sControlValues = cvs''
    }
    where
-      cvs' = update iIndex (Just $ LvI32 i') (sControlValues state)
-      cvs'' :: Seq (Maybe LvValue)
+      cvs' = update iIndex (LvI32 i') (sControlValues state)
+      cvs'' :: Seq LvValue
       cvs'' = foldl' shiftRegister cvs'
               $ zip (vIndicators vi) (toList (sIndicatorValues state))
-      shiftRegister ::  Seq (Maybe LvValue) -> ((String, LvIndicator), Maybe LvValue)
-                        -> Seq (Maybe LvValue)
+      shiftRegister ::  Seq LvValue -> ((String, LvIndicator), LvValue)
+                        -> Seq LvValue
       shiftRegister cvs ((_, LvSRIndicator cidx), ival) = 
-         update cidx (ival `orElse` index cvs cidx) cvs
+         update cidx ival cvs
       shiftRegister cvs _ = cvs
 
 coerceToInt :: LvValue -> LvValue
 coerceToInt v@(LvI32 _) = v
 coerceToInt (LvDBL d) = LvI32 (floor d)
-
-getControl :: LvState -> Int -> LvValue -> LvValue
-getControl st idx def = fromMaybe def $ index (sControlValues st) idx
-
-getIndicator :: LvState -> Int -> LvValue -> LvValue
-getIndicator st idx def = fromMaybe def $ index (sIndicatorValues st) idx
 
 \end{code}
 
