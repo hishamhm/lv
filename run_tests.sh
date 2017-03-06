@@ -3,10 +3,14 @@
 ok="\033[1;32mOK\033[0m"
 failed="\033[1;31mFailed\033[0m"
 
+rm .failed
 for i in demo/*.hs
 do
+(
    b=$(basename $i .hs)
-   src="Test_$b.hs"
+   dir=$(mktemp -d)
+   cp LvInterpreter.in.lhs $dir/LvInterpreter.lhs
+   src="$dir/Test_$b.hs"
    exe="Test_$b"
    cat <<EOF > $src
 
@@ -25,28 +29,37 @@ main =
 EOF
    cat testutil/* >> $src
    cat $i >> $src
-   echo "Compiling Test_$b"
-   cp LvInterpreter.in.lhs LvInterpreter.lhs
-   ghc -i. -o $exe $src || {
+   ghc -i. -i$dir -o $exe $src > /dev/null || {
       rm LvInterpreter.lhs
       echo -e "$failed compiling $src"
+      rm -rf "$dir"
+      touch .failed
       exit 1
    }
-   rm LvInterpreter.lhs
-   echo "Running Test_$b"
    ./$exe 2> /dev/null > $exe.out || {
       echo -e "$failed running $exe"
+      rm -rf "$dir"
+      touch .failed
       exit 1
    }
-   if diff $exe.out $exe.ref
+   rm -rf "$dir"
+   if diff $exe.out $exe.ref > /dev/null
    then
       echo -e "$ok! Test_$b"
    else
       echo -e "$failed! Test_$b"
+      touch .failed
       exit 1
    fi
+) &
 done
 
-echo
-echo -e "\033[1;32mAll passed! :)\033[0m"
-echo
+wait
+
+if [ -e .failed ]
+then
+   rm .failed
+   exit 1
+fi
+rm .failed
+exit 0

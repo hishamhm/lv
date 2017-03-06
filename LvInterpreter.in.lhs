@@ -375,6 +375,7 @@ runVI vi =
 \end{code}
 
 \subsection{Initial state}
+\label{initialstate}
 
 The initial state consists of the input values entered for controls,
 the initial values of indicators, and empty states for each node, containing
@@ -418,6 +419,9 @@ initialState ts vi =
       mapIdx :: ((Int, a) -> b) -> [a] -> [b]
       mapIdx fn l = zipWith (curry fn) (indices l) l
 
+emptyInputs :: Int -> Seq (Maybe LvValue)
+emptyInputs n = fromList (replicate n Nothing)
+
 \end{code}
 
 The initial schedule is defined as follows. All controls, constants and
@@ -446,6 +450,25 @@ initialSchedule vi =
       isBootNode i (_, LvStructure LvSubVI _)     | nrConnectedInputs i vi == 0 = True
       isBootNode i (_, LvStructure LvSequence _)  | nrConnectedInputs i vi == 0 = True
       isBootNode _ _ = False
+
+\end{code}
+
+A node con only be fired when all its connected inputs have incoming data. We
+specifically check for connected inputs because some LabVIEW nodes have
+optional inputs. We assume here for simplicity that the type-checking step
+prior to execution verified that the correct set of mandatory inputs has been
+connected. Here, we derive the number of connections of a node from the list
+of wires.
+
+\begin{code}
+
+nrConnectedInputs :: Int -> LvVI -> Int
+nrConnectedInputs idx vi =
+   1 + foldl' maxInput (-1) (vWires vi)
+   where
+      maxInput :: Int -> LvWire -> Int
+      maxInput mx (LvWire _ (LvPortAddr LvN i n)) | i == idx = max mx n
+      maxInput mx _ = mx
 
 \end{code}
 
@@ -491,16 +514,15 @@ runEvent (LvElemAddr LvC idx) state0 vi =
 
 \end{code}
 
-When triggering a node, the interpreter consumes the input values for the
-node from the state, runs the |runNode| operation for the appropriate
-type of node, and produces a new state and a list of values to be fired to its
+When triggering a node for execution, the event may be triggering either an
+initial execution from data fired through its input ports, or a continuation
+of a previous execution that has not finished running. In the former case, the
+interpreter fetches the data from the node's input ports and clears the node
+state for execution. In the latter case, the inputs come from the data
+previously stored in the continuation object and the node state is kept as is.
+Once the inputs and state are determined, |runEvent| calls |runNode|, which
+produces a new state and may produce data to be fired through the node's
 output ports.
-
-To determine the input state (|state1|) and input values (|inputs|) for the
-|runNode| function, |runEvent| checks if the node has a pending continuation
-(|k|). If it has a pending continuation, inputs are obtained from the
-continuation's |LvKFunction| object. If there is no pending continuation,
-the node state is cleared prior to passing it to |runNode|.
 
 \begin{code}
 
@@ -509,25 +531,33 @@ runEvent (LvElemAddr LvN idx) state0 vi =
    foldl' (\s (p, v) -> fire vi v (LvPortAddr LvN idx p) s) state2 pvs
    where
       nstate = index (sNodeStates state0) idx
-      k = nsCont nstate
-      state1 =
-         case k of
-         Nothing  -> updateNode idx state0 clearState []
-                     where
-                        clearState = nstate { nsInputs = clear }
-                        clear = emptyInputs $ Seq.length $ nsInputs nstate
-         Just _   -> state0
-      inputs =
-         trc ("CHECK INPUTS (LVN, " ++ shw idx ++ ") ON STATE " ++ shw state0 ++ " FOR VI " ++ shw vi ++ " WITH K " ++ shw k) $
-         case k of
-         Nothing                     -> toList (nsInputs nstate)
-         Just (LvKFunction _ kargs)  -> map Just kargs
-         Just (LvKState _)           -> undefined
+      (state1, inputs) =
+         case nsCont nstate of
+         Nothing -> startNode 
+         Just k  -> continueNode k
       (state2, pvs) = runNode (snd $ vNodes vi !! idx) state1 inputs idx
+         
+      startNode = (state1, inputs)
+         where
+            state1 = updateNode idx state0 clearState []
+            inputs = toList (nsInputs nstate)
+            clearState = nstate { nsInputs = clear }
+            clear = emptyInputs (Seq.length (nsInputs nstate))
+            
+      continueNode k = (state1, inputs)
+         where
+            state1 = state0
+            inputs = case k of
+                     LvKFunction _ kargs  -> map Just kargs
+                     LvKState _           -> undefined
 
--- Produce a sequence of n empty inputs
-emptyInputs :: Int -> Seq (Maybe LvValue)
-emptyInputs n = fromList (replicate n Nothing)
+\end{code}
+
+When updating the internal state of a node, we use the auxiliary function
+|updateNode|, which increments the timestamp, optionally appends events to the
+scheduler queue, and replaces the node state for the node at the given index.
+
+\begin{code}
 
 updateNode :: Int -> LvState -> LvNodeState -> [LvElemAddr] -> LvState
 updateNode idx st newNstate newSched =
@@ -540,6 +570,12 @@ updateNode idx st newNstate newSched =
 \end{code}
 
 \subsection{Firing data to objects}
+\label{firing}
+
+As shown in the previous section, when objects are triggered for execution, they may produce new values
+which are fired through their output ports. The function |fire| iterates through the adjacency list of
+wires, identifying all outward connections of an object and propagating the value to their destination
+nodes.
 
 \begin{code}
 
@@ -552,6 +588,14 @@ fire vi value addr state =
          if addr == src
          then propagate value vi dst s
          else s
+
+\end{code}
+
+When a value is propagated to an indicator, its value is stored in the
+state, with the appropriate handling for different kinds of tunnel
+indicators.
+
+\begin{code}
 
 propagate :: LvValue -> LvVI -> LvPortAddr -> LvState -> LvState
 propagate value vi (LvPortAddr LvI dnode _) state =
@@ -569,6 +613,14 @@ propagate value vi (LvPortAddr LvI dnode _) state =
          sTs = sTs state + 1,
          sIndicatorValues = update dnode newValue (sIndicatorValues state)
       }
+
+\end{code}
+
+When a value is propagated to a node, the interpreter stores the value in the
+|nsInputs| sequence of the node state. Then, it needs to decide whether the
+node needs to be scheduled for execution.
+
+\begin{code}
 
 propagate value vi (LvPortAddr LvN dnode dport) state =
    state {
@@ -590,43 +642,105 @@ propagate value vi (LvPortAddr LvN dnode dport) state =
             then sched ++ [entry]
             else sched
 
+\end{code}
+
+To determine if a node needs to be scheduled, the interpreter checks if all
+its required inputs contain values. For function nodes, this means that
+all mandatory arguments must have incoming values. For structures, it means
+that all tunnels going into the structure must have values available for
+consumption.
+
+Feedback nodes are never triggered by another node: when they receive
+a value through its input port, this value remains stored for the next
+single-shot execution of the whole graph. Constants do not have input ports,
+so they cannot receive values.
+
+\begin{code}
+
 shouldSchedule :: LvNode -> Seq (Maybe LvValue) -> Bool
 shouldSchedule node inputs =
    case node of
-      LvStructure _ vi -> shouldScheduleSubVI vi inputs
-      LvCase vis -> shouldScheduleSubVI (head vis) inputs
-      LvFunction name ->
+      LvFunction name   -> shouldScheduleNode name
+      LvStructure _ vi  -> shouldScheduleSubVI vi inputs
+      LvCase vis        -> shouldScheduleSubVI (head vis) inputs
+      LvFeedbackNode _  -> False
+      LvConstant _      -> undefined
+   where
+      shouldScheduleNode name =
          isNothing $ elemIndexL Nothing mandatoryInputs
          where
             mandatoryInputs =
                case nrMandatoryInputs name of
                Nothing -> inputs
                Just n  -> Seq.take n inputs
-      LvFeedbackNode _ ->
-         False
-      _ ->
-         isNothing $ elemIndexL Nothing inputs
+      shouldScheduleSubVI :: LvVI -> Seq (Maybe LvValue) -> Bool
+      shouldScheduleSubVI vi inputs = 
+         isNothing $ find unfilledTunnel (indices $ vControls vi)
+            where
+               unfilledTunnel cidx = 
+                  case vControls vi !! cidx of
+                     (_, LvTunControl) -> trc ("UNFILLED CTRL!") $ isNothing (index inputs cidx)
+                     _ -> False
 
 indices :: [a] -> [Int]
 indices l = [0 .. (length l - 1)]
-
-shouldScheduleSubVI :: LvVI -> Seq (Maybe LvValue) -> Bool
-shouldScheduleSubVI vi inputs = 
-   isNothing $ find unfilledTunnel (indices $ vControls vi)
-      where
-         unfilledTunnel cidx = 
-            case vControls vi !! cidx of
-               (_, LvTunControl) -> isNothing (index inputs cidx)
-               _ -> False
 
 \end{code}
 
 \section{Nodes and structures}
 
+The function |runNode| takes care of implementing the general logic for each
+kind of node. For functions, it handles the management of continuations; for
+structures, it triggers their subgraphs according to each structure's rules
+of iteration and conditions of termination.
+
+The function |runNode| takes a node, an input state, a list of input values,
+the integer index that identifies the node in the VI, and produces a 
+new state and a list of index-value pairs, listing values to be sent through
+output ports.
+
 \begin{code}
 
 runNode ::  LvNode -> LvState -> [Maybe LvValue] -> Int
             -> (LvState, [(Int, LvValue)])
+
+\end{code}
+
+\subsection{Constant nodes}
+
+When executed, a constant node simply sends out its value through its
+single output port.
+
+\begin{code}
+
+runNode (LvConstant value) state1 _ _ =
+   trc ("firing constant " ++ shw value) $
+   (state1, [(0, value)])
+
+\end{code}
+
+\subsection{Feedback nodes}
+
+A feedback node behaves like a constant node: it sends out the value it stores
+through its output port. In spite of having an input port, a feedback node is
+only triggered at the beginning of the execution of the graph, as determined
+by the initial state (Section \ref{initialstate}) and firing rules (Section
+\ref{firing}).
+
+In our model, an |LvFeedbackNode| always takes an initialization value. In the
+LabVIEW UI, this value can be left out, in which case a default value for the
+appropriate data type, such as zero or an empty string, is implied.
+
+\begin{code}
+
+runNode (LvFeedbackNode initVal) state1 inputs _ =
+   (state1, [(0, fromMaybe initVal (head inputs) )])
+
+\end{code}
+
+\subsection{Function nodes}
+
+\begin{code}
 
 runNode (LvFunction name) state1 inputs idx =
    let
@@ -638,8 +752,8 @@ runNode (LvFunction name) state1 inputs idx =
 
       ret =
          case nsCont nstate of
-         Nothing -> applyFunction (visible state1) name inputs
-         Just kf -> kFn kf        (visible state1)      (catMaybes inputs)
+         Nothing -> applyFunction name (visible state1) inputs
+         Just kf -> kFn kf             (visible state1) (catMaybes inputs)
    in
       trc ("firing function " ++ name) $
       case ret of
@@ -651,27 +765,15 @@ runNode (LvFunction name) state1 inputs idx =
       LvContinue k' ->
          (updateNode idx state1 nstate{ nsCont = Just k' } [LvElemAddr LvN idx], [])
 
-runNode (LvConstant value) state1 _ _ =
-   trc ("firing constant " ++ shw value) $
-   (state1, [(0, value)])
-
 \end{code}
 
-In our model, an |LvFeedbackNode| always takes an initialization value. In the
-LabVIEW UI, this value can be left out, in which case a default value of zero
-is implied.
+\subsection{Structures}
+
+% TODO for when no N is set and an array is given as input tunnel
+% TODO check what happens when both are given
 
 \begin{code}
 
-runNode (LvFeedbackNode initVal) state1 inputs _ =
-   (state1, [(0, fromMaybe initVal (head inputs) )])
-
-\end{code}
-
-\begin{code}
-
--- TODO for when no N is set and an array is given as input tunnel
--- TODO check what happens when both are given
 runNode (LvStructure LvFor subVi) state1 inputs idx =
    trc ("firing for") $
    runStructure subVi initCounter shouldStop state1 idx inputs
@@ -682,6 +784,8 @@ runNode (LvStructure LvFor subVi) state1 inputs idx =
          where
             (LvI32 i) = index (sControlValues st) iIndex
             LvI32 n = coerceToInt $ index (sControlValues st) nIndex
+      coerceToInt v@(LvI32 _) = v
+      coerceToInt (LvDBL d) = LvI32 (floor d)
 
 runNode (LvStructure LvWhile subVi) state1 inputs idx =
    trc ("firing while") $
@@ -696,7 +800,7 @@ runNode (LvStructure LvSequence vi) state1 inputs idx =
    let
       (state2, pvs) = runStructure vi id (const True) state1 idx inputs
       nstate2 = index (sNodeStates state2) idx
-      nextq = [ (0, LvBool True) | isNothing (nsCont nstate2) ]
+      nextq = [ (nextIndex, LvBool True) | isNothing (nsCont nstate2) ]
    in
       (state2, pvs ++ nextq)
 
@@ -747,7 +851,7 @@ runStructure subVi initState shouldStop state1 idx inputs =
       statek = 
          case nsCont nstate of
          Nothing -> initState
-                    $ feedInputsToVI inputs
+                    $ setControlValues inputs
                     $ initialState ts' subVi
          Just (LvKState st) -> st { sTs = ts' }
       statek'@(LvState _ qk _ _ _) = run statek subVi
@@ -774,33 +878,18 @@ runStructure subVi initState shouldStop state1 idx inputs =
 
 \end{code}
 
-A node is fired when all its connected inputs have incoming data. We
-specifically check for connected inputs because some LabVIEW nodes have
-optional inputs. We assume here for simplicity that the type-checking step
-prior to execution verified that the correct set of mandatory inputs has been
-connected. Here, we derive the number of connections of a node from the
-list of wires.
-
 \begin{code}
 
-nrConnectedInputs :: Int -> LvVI -> Int
-nrConnectedInputs idx vi =
-   1 + foldl' maxInput (-1) (vWires vi)
-   where
-      maxInput :: Int -> LvWire -> Int
-      maxInput mx (LvWire _ (LvPortAddr LvN i n)) | i == idx = max mx n
-      maxInput mx _ = mx
-
-\end{code}
-
-\begin{code}
-
-feedInputsToVI :: [Maybe LvValue] -> LvState -> LvState
-feedInputsToVI inputs state =
+setControlValues :: [Maybe LvValue] -> LvState -> LvState
+setControlValues inputs state =
    state {
       sTs = sTs state + 1,
       sControlValues = fromList $ zipWith fromMaybe (toList $ sControlValues state) inputs
    }  
+
+\end{code}
+
+\begin{code}
 
 iIndex :: Int
 iIndex = 0 -- counter control for both 'for' and 'while'
@@ -808,6 +897,8 @@ nIndex :: Int
 nIndex = 1 -- limit control for 'for'
 testIndex :: Int
 testIndex = 0 -- test indicator for 'while'
+nextIndex :: Int
+nextIndex = 0 -- sequence control/indicators for 'sequence'
 
 initCounter :: LvState -> LvState
 initCounter state =
@@ -834,24 +925,24 @@ nextStep vi state i' =
          update cidx ival cvs
       shiftRegister cvs _ = cvs
 
-coerceToInt :: LvValue -> LvValue
-coerceToInt v@(LvI32 _) = v
-coerceToInt (LvDBL d) = LvI32 (floor d)
-
 \end{code}
 
 \section{Operations}
 
 \begin{code}
+applyFunction :: String -> LvVisibleState -> [Maybe LvValue] -> LvReturn
+\end{code}
 
-isOp :: String -> Bool
-isOp f = f `elem` ["+", "-", "*", "/", ">", "<"]
+\subsection{Random Number}
 
-applyFunction :: LvVisibleState -> String -> [Maybe LvValue] -> LvReturn
+\begin{code}
+applyFunction "RandomNumber" _ [] = LvReturn [LvDBL 0.5] -- not very random :)
+\end{code}
 
-applyFunction _ "RandomNumber" [] = LvReturn [LvDBL 0.5] -- not very random :)
+\subsection{Array Max \& Min}
 
-applyFunction _ "ArrayMax&Min" [Just (LvArr a)] =
+\begin{code}
+applyFunction "ArrayMax&Min" _ [Just (LvArr a)] =
    if null a
    then LvReturn [LvDBL 0,  LvI32 0,       LvDBL 0,  LvI32 0]
    else LvReturn [maxVal,   LvI32 maxIdx,  minVal,   LvI32 minIdx]
@@ -865,19 +956,33 @@ applyFunction _ "ArrayMax&Min" [Just (LvArr a)] =
 
 \end{code}
 
+\subsection{Insert Into Array}
+
 \begin{code}
 
-applyFunction _ "InsertIntoArray" (Just arr : Just vs : idxs) =
+applyFunction "InsertIntoArray" _ (Just arr : Just vs : idxs) =
    LvReturn [insertIntoArray arr vs (map numIdx idxs)]
    where
       numIdx i = case i of
                  Nothing -> -1
                  Just (LvI32 n) -> n
 
-applyFunction _ "Bundle" args = 
+\end{code}
+
+\subsection{Bundle}
+
+\begin{code}
+
+applyFunction "Bundle" _ args = 
    LvReturn [LvCluster (catMaybes args)]
 
-applyFunction (LvVisibleState ts) "WaitUntilNextMs" [Just (LvI32 ms)] =
+\end{code}
+
+\subsection{Wait Until Next Ms}
+
+\begin{code}
+
+applyFunction "WaitUntilNextMs" (LvVisibleState ts) [Just (LvI32 ms)] =
    LvContinue $ LvKFunction waitUntil [LvI32 nextMs]
    where
       nextMs = ts - (ts `mod` ms) + ms
@@ -885,18 +990,28 @@ applyFunction (LvVisibleState ts) "WaitUntilNextMs" [Just (LvI32 ms)] =
          | now >= stop  = LvReturn []
          | otherwise    = LvContinue $ LvKFunction waitUntil arg
 
-applyFunction vst "WaitUntilNextMs" [Just (LvDBL msd)] =
-   applyFunction vst "WaitUntilNextMs" [Just (LvI32 (floor msd))]
+applyFunction "WaitUntilNextMs" vst [Just (LvDBL msd)] =
+   applyFunction "WaitUntilNextMs" vst [Just (LvI32 (floor msd))]
 
-applyFunction _ "+" args = numOp   (+) (+)  args
-applyFunction _ "-" args = numOp   (-) (-)  args
-applyFunction _ "*" args = numOp   (*) (*)  args
-applyFunction _ "/" args = numOp   (/) div  args
-applyFunction _ "<" args = boolOp  (<) (<)  args
-applyFunction _ ">" args = boolOp  (>) (>)  args
+\end{code}
 
-applyFunction _ fn args =
+\subsection{Numeric and relational operators}
+
+\begin{code}
+
+applyFunction "+" _ args = numOp   (+) (+)  args
+applyFunction "-" _ args = numOp   (-) (-)  args
+applyFunction "*" _ args = numOp   (*) (*)  args
+applyFunction "/" _ args = numOp   (/) div  args
+applyFunction "<" _ args = boolOp  (<) (<)  args
+applyFunction ">" _ args = boolOp  (>) (>)  args
+
+applyFunction fn _ args =
    error ("No rule to apply " ++ fn ++ " " ++ show args)
+
+\end{code}
+
+\begin{code}
 
 ndims :: LvValue -> Int
 ndims (LvArr (v:_))  = 1 + ndims v
