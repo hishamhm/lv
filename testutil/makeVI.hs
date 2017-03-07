@@ -7,10 +7,10 @@ wire a b = LvStringWire a b
 
 makeVI ::  [(String, LvControl)] -> [(String, LvIndicator)]
            -> [(String, LvNode)] -> [LvStringWire] -> LvVI
-makeVI controls indicators nodes stringWires =
+makeVI ctrls indics nodes stringWires =
    LvVI {
-      vControls = controls,
-      vIndicators = indicators,
+      vCtrls = ctrls,
+      vIndics = indics,
       vNodes = nodes,
       vWires = map convert stringWires
    }
@@ -18,8 +18,8 @@ makeVI controls indicators nodes stringWires =
       convert :: LvStringWire -> LvWire      
       convert (LvStringWire src dst) =
          let
-            (srcType,  srcElem,  srcPort')  = findElem controls    LvC  vIndicators  src
-            (dstType,  dstElem,  dstPort')  = findElem indicators  LvI  vControls    dst
+            (srcType,  srcElem,  srcPort')  = findElem ctrls   LvC  vIndics  src
+            (dstType,  dstElem,  dstPort')  = findElem indics  LvI  vCtrls   dst
          in
             LvWire (LvPortAddr srcType srcElem srcPort') (LvPortAddr dstType dstElem dstPort')
 

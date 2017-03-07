@@ -13,5 +13,14 @@
 %format srcPort'
 %format dstPort'
 %format (LvPortAddr t n p) = "\llparenthesis " t ", " n ", " p "\rrparenthesis "
+%format (LvElemAddr t n) = "\llparenthesis " t ", " n "\rrparenthesis "
+%format s0 = "s_{0}"
+%format s1 = "s_{1}"
+%format s2 = "s_{2}"
+%format s3 = "s_{3}"
+%format sk = "sk_{1}"
+%format sk' = "sk_{2} "
+%format ns2 = "ns_{2}"
+%format ns3 = "ns_{3}"
 
 %format LvState = "\hyperlink{LvState}{LvState}"

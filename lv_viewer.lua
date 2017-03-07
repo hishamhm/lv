@@ -27,15 +27,15 @@ local state_grammar = re.compile([[
       {:ts:               sTs :} ', '
       {:sched:            sSched :} ', '
       {:node_states:      sNodeStates :} ', '
-      {:control_values:   sControlValues :} ', '
-      {:indicator_values: sIndicatorValues :}
+      {:control_values:   sCtrlVals :} ', '
+      {:indicator_values: sIndicVals :}
    |} '}'
    
-   sTs              <- 'sTs = ' Int
-   sSched           <- 'sSched = ' LvElemAddr_list
-   sNodeStates      <- 'sNodeStates = ' Seq_LvNodeState
-   sControlValues   <- 'sControlValues = ' Seq_LvValue
-   sIndicatorValues <- 'sIndicatorValues = ' Seq_LvValue
+   sTs         <- 'sTs = ' Int
+   sSched      <- 'sSched = ' LvElemAddr_list
+   sNodeStates <- 'sNodeStates = ' Seq_LvNodeState
+   sCtrlVals   <- 'sCtrlVals = ' Seq_LvValue
+   sIndicVals  <- 'sIndicVals = ' Seq_LvValue
 
    LvElemAddr_list    <- '[' {| (LvElemAddr    (',' LvElemAddr)*    )? |} ']'
    LvNodeState_list   <- '[' {| (LvNodeState   (',' LvNodeState)*   )? |} ']'
@@ -65,14 +65,14 @@ local state_grammar = re.compile([[
 
 local vi_grammar = re.compile([[
    LvVI <- 'LvVI {' {|
-      {:controls:   vControls :} ', '
-      {:indicators: vIndicators :} ', '
+      {:controls:   vCtrls :} ', '
+      {:indicators: vIndics :} ', '
       {:nodes:      vNodes :} ', '
       {:wires:      vWires :}
    |} '}'
    
-   vControls   <- 'vControls = '   String_LvControl_pair_list
-   vIndicators <- 'vIndicators = ' String_LvIndicator_pair_list
+   vCtrls  <- 'vCtrls = '   String_LvControl_pair_list
+   vIndics <- 'vIndics = ' String_LvIndicator_pair_list
 
    String_LvControl_pair_list   <- '[' {| (String_LvControl_pair   (',' String_LvControl_pair)*   )? |} ']'
    String_LvIndicator_pair_list <- '[' {| (String_LvIndicator_pair (',' String_LvIndicator_pair)* )? |} ']'
