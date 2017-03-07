@@ -1056,32 +1056,33 @@ results or a continuation.
 applyFunction :: String -> LvVisibleState -> [Maybe LvValue] -> LvReturn
 \end{code}
 
-Our goal in this interpreter is not to reproduce the functionality of
-LabVIEW, but to describe in detail the semantics of the dataflow language
-at its core. For this reason, we include below only a small selection
-of functions, which should be enough to illustrate the behavior of 
-the language through examples.
+Our goal in this interpreter is not to reproduce the functionality of LabVIEW
+with respect to its domain in engineering, but to describe in detail the
+semantics of the dataflow language at its core. For this reason, we include
+below only a small selection of functions, which should be enough to
+illustrate the behavior of the language through examples.
 
-The simpler functions have single-line implementations. The more
+The simpler functions have single-line implementations. Such are the case
+of @RandomNumber@, an example of a  The more
 interesting ones delegate to auxiliary functions, which we will present
 in more detail below.
 
 \begin{code}
 
-applyFunction "+" _ args = numOp   (+) (+)  args
-applyFunction "-" _ args = numOp   (-) (-)  args
-applyFunction "*" _ args = numOp   (*) (*)  args
-applyFunction "/" _ args = numOp   (/) div  args
-applyFunction "<" _ args = boolOp  (<) (<)  args
-applyFunction ">" _ args = boolOp  (>) (>)  args
+applyFunction "+" _ args = numOp   (+)  (+)  args
+applyFunction "-" _ args = numOp   (-)  (-)  args
+applyFunction "*" _ args = numOp   (*)  (*)  args
+applyFunction "/" _ args = numOp   (/)  div  args
+applyFunction "<" _ args = boolOp  (<)  (<)  args
+applyFunction ">" _ args = boolOp  (>)  (>)  args
 
-applyFunction "RandomNumber" _ [] = LvReturn [LvDBL 0.5]
+applyFunction "RandomNumber" (LvVisibleState ts) [] = LvReturn [LvDBL 0.5]
 
 applyFunction "ArrayMax&Min" _ [Just (LvArr a)] = LvReturn (arrayMaxMin a)
 
 applyFunction "InsertIntoArray" _ (Just arr : Just vs : idxs) =
-   LvReturn [insertIntoArray arr vs (map numIdx idxs)]
-   where numIdx i = if isNothing i then -1 else (\(Just (LvI32 n)) -> n) i
+   LvReturn [insertIntoArray arr vs (map toNumber idxs)]
+   where toNumber i = if isNothing i then (-1) else (\(Just (LvI32 n)) -> n) i
 
 applyFunction "Bundle" _ args = LvReturn [LvCluster (catMaybes args)]
 

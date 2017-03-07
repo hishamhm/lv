@@ -26,14 +26,14 @@ local state_grammar = re.compile([[
    LvState <- 'LvState {' {|
       {:ts:               sTs :} ', '
       {:sched:            sSched :} ', '
-      {:node_states:      sNodeStates :} ', '
+      {:node_states:      sNStates :} ', '
       {:control_values:   sCtrlVals :} ', '
       {:indicator_values: sIndicVals :}
    |} '}'
    
    sTs         <- 'sTs = ' Int
    sSched      <- 'sSched = ' LvElemAddr_list
-   sNodeStates <- 'sNodeStates = ' Seq_LvNodeState
+   sNStates    <- 'sNStates = ' Seq_LvNodeState
    sCtrlVals   <- 'sCtrlVals = ' Seq_LvValue
    sIndicVals  <- 'sIndicVals = ' Seq_LvValue
 
