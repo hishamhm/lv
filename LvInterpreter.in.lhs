@@ -473,6 +473,7 @@ nrConnectedInputs idx vi =
 \end{code}
 
 \subsection{Event processing}
+\label{run}
 
 The main operation of the interpreter consists of taking one entry off the
 scheduler queue, incrementing the timestamp, and triggering the event corresponding
@@ -517,12 +518,12 @@ runEvent (LvElemAddr LvC idx) state0 vi =
 When triggering a node for execution, the event may be triggering either an
 initial execution from data fired through its input ports, or a continuation
 of a previous execution that has not finished running. In the former case, the
-interpreter fetches the data from the node's input ports and clears the node
-state for execution. In the latter case, the inputs come from the data
-previously stored in the continuation object and the node state is kept as is.
-Once the inputs and state are determined, |runEvent| calls |runNode|, which
-produces a new state and may produce data to be fired through the node's
-output ports.
+interpreter fetches the data from the node's input ports and clears it from
+the node state, ensuring incoming values are consumed only once. In the latter
+case, the inputs come from the data previously stored in the continuation
+object and the node state is kept as is. Once the inputs and state are
+determined, |runEvent| calls |runNode|, which produces a new state and may
+produce data to be fired through the node's output ports.
 
 \begin{code}
 
@@ -740,20 +741,30 @@ runNode (LvFeedbackNode initVal) state1 inputs _ =
 
 \subsection{Function nodes}
 
+When running a function node, the interpreter first checks if it has an
+existing continuation pending for the node. If there is one, it resumes the
+continuation, applying the function stored in the continuation object |k|.
+Otherwise, it triggers the function (identified by its name) using
+|applyFunction|.
+
+The function may return either a |LvReturn| value, which contains the list of
+result values be propagated through its output ports, or a |LvContinue| value,
+which contains the next continuation |k'| to be executed. When a continuation
+is returned, the node itself (identified by its address |idx|) is also
+scheduled back in the queue, and no values are produced to be sent to the
+node's output ports.
+
 \begin{code}
 
 runNode (LvFunction name) state1 inputs idx =
    let
       nstates = sNodeStates state1
       nstate = index nstates idx
-
-      visible :: LvState -> LvVisibleState
       visible state = LvVisibleState (sTs state)
-
       ret =
          case nsCont nstate of
          Nothing -> applyFunction name (visible state1) inputs
-         Just kf -> kFn kf             (visible state1) (catMaybes inputs)
+         Just k  -> kFn k              (visible state1) (catMaybes inputs)
    in
       trc ("firing function " ++ name) $
       case ret of
@@ -769,40 +780,117 @@ runNode (LvFunction name) state1 inputs idx =
 
 \subsection{Structures}
 
+The interpreter supports five kinds of structures: for-loop, while-loop,
+sequence, case and sub-VI. They are all implemented similarly, by running a
+subgraph (itself represented as an instance of |LvVI|, like the main graph),
+and storing a state object for this subgraph as a continuation object of the
+node state for the enclosing graph (represented as |LvState|, like the main
+state). Running this subgraph may take several evaluation steps, so the
+enclosing graph will continuously queue it for execution until it decides it
+should finish running. Each time the scheduler of the enclosing graph triggers
+the structure node, it will run the subgraph consuming one event of the
+internal state's own scheduler queue. This will, in effect, produce a
+round-robin of all structures that may be running concurrently.
+
+This common behavior is implemented in the |runStructure| function that
+will be presented below. The implementations of |runNode| for all
+structures use |runStructure|, differing by the way they control
+triggering and termination of subgraphs.
+
 % TODO for when no N is set and an array is given as input tunnel
 % TODO check what happens when both are given
+
+The for-loop provides |runStructure| with a termination function |shouldStop|
+which determines if the loop should stop comparing the value of the counter
+control (at index 0) with the limit control (at index 1). Also, it uses the
+helper function |initCounter| to force the initial value of control 0 when the
+structure is triggered for the first time (that is, when it is not resuming a
+continuation).
 
 \begin{code}
 
 runNode (LvStructure LvFor subVi) state1 inputs idx =
    trc ("firing for") $
-   runStructure subVi initCounter shouldStop state1 idx inputs
+   runStructure subVi shouldStop state1 idx (initCounter state1 idx inputs)
    where
       shouldStop st =
          trc (shw (i + 1) ++ " >= " ++ shw n) $
          (i + 1 >= n)
          where
-            (LvI32 i) = index (sControlValues st) iIndex
-            LvI32 n = coerceToInt $ index (sControlValues st) nIndex
+            (LvI32 i) = index (sControlValues st) 0
+            LvI32 n = coerceToInt $ index (sControlValues st) 1
       coerceToInt v@(LvI32 _) = v
       coerceToInt (LvDBL d) = LvI32 (floor d)
 
+\end{code}
+
+The while-loop structure in LabVIEW always provides an iteration counter,
+implemented in the interpreter as a counter control at index 0.
+As in the for-loop, it is initialized using helper function |initCounter|.
+The termination function for the while-loop checks for the boolean
+value at the indicator at index 0.
+
+\begin{code}
+
 runNode (LvStructure LvWhile subVi) state1 inputs idx =
    trc ("firing while") $
-   runStructure subVi initCounter shouldStop state1 idx inputs
+   runStructure subVi shouldStop state1 idx (initCounter state1 idx inputs)
    where
       shouldStop st =
          not test
          where
-            (LvBool test) = index (sIndicatorValues st) testIndex
+            (LvBool test) = index (sIndicatorValues st) 0
+
+\end{code}
+
+% TODO move this explanation to the main text
+% TODO add figure
+Sequence nodes in LabVIEW are a way to enforce order of execution irrespective
+of data dependencies. In the LabVIEW UI, sequences are presented as a series
+of frames presented like a film-strip. In our interpreter, we implement each
+frame of the film-strip as a separate |LvStructure| object containing a
+boolean control at input port 0 and a boolean indicator at output port 0.
+Frames of a sequence are connected through a wire connecting the frame's
+indicator 0 to the next frame's control 0. This way, we force a
+data dependency between frames, and the implementation of |runNode| for
+sequences pushes a boolean value to output port 0 to trigger the execution of
+the next frame in the sequence. This connection is explicit in our model,
+but it could be easily hidden in the application's UI.
+
+\begin{code}
 
 runNode (LvStructure LvSequence vi) state1 inputs idx =
    let
-      (state2, pvs) = runStructure vi id (const True) state1 idx inputs
+      (state2, pvs) = runStructure vi (const True) state1 idx inputs
       nstate2 = index (sNodeStates state2) idx
-      nextq = [ (nextIndex, LvBool True) | isNothing (nsCont nstate2) ]
+      nextq = [ (0, LvBool True) | isNothing (nsCont nstate2) ]
    in
       (state2, pvs ++ nextq)
+
+\end{code}
+
+Case structures are different from the other ones because they contain
+a list of subgraphs. All subgraphs representing cases are assumed to
+have the same set of controls and indicators, and they all have a
+numeric control at index 0 which determines which case is active.
+LabVIEW denotes cases using enumeration types, but in the interpreter
+we simply use an integer.
+
+When a case node is triggered, |runNode| needs to choose which VI to use with
+|runStructure|. In its first execution, it reads from the input data sent to
+control 0; it subsequent executions, when those inputs are no longer
+available, it reads directly from the control value, which it stores in the
+node state. Note that since case VIs have the same set of controls and
+indicators, they are structurally equivalent, and the initialization routine
+in Section \ref{initialstate} simply uses the first case when constructing the
+initial empty state.
+
+A case subgraph does not iterate: it may take several schedule events to run
+through a full single-shot execution, but once the subgraph scheduler queue is
+empty, it should not run again. For this reason, the termination function is
+simply |const True|.
+
+\begin{code}
 
 runNode (LvCase vis) state1 inputs idx =
    let
@@ -815,7 +903,7 @@ runNode (LvCase vis) state1 inputs idx =
              Just _ ->
                 (\(LvI32 i) -> i) $
                 fromMaybe (error "no input 0!?") $ index (nsInputs nstate1) 0
-      (state2, pvs) = runStructure (vis !! n) id (const True) state1 idx inputs
+      (state2, pvs) = runStructure (vis !! n) (const True) state1 idx inputs
       state3 =
          case nsCont nstate1 of
             Nothing ->
@@ -829,20 +917,63 @@ runNode (LvCase vis) state1 inputs idx =
    in
       (state3, pvs)
 
+\end{code}
+
+Finally, a sub-VI structure has a simple implementation, where we launch the
+subgraph with |runStructure|, directing it to run once and performing no
+additional operations to its state.
+
+\begin{code}
+
 runNode (LvStructure LvSubVI subVi) state1 inputs idx =
    trc ("firing subvi") $
-   runStructure subVi id (const True) state1 idx inputs
+   runStructure subVi (const True) state1 idx inputs
 
 \end{code}
+
+The core to the execution of all structure nodes is the |runStructure|
+function, which we present here. This function takes as arguments
+the subgraph to execute, the termination function to apply, the
+enclosing graph's state, the index of the structure in the enclosing
+VI, and returns a pair with the new state and a list of port-value
+pairs to fire through output ports. 
 
 \begin{code}
 
 runStructure ::  LvVI
-                 -> (LvState -> LvState)
                  -> (LvState -> Bool)
                  -> LvState -> Int -> [Maybe LvValue]
                  -> (LvState, [(Int, LvValue)])
-runStructure subVi initState shouldStop state1 idx inputs =
+
+\end{code}
+
+Its execution works as follows. First, it determines |statek|, which is the
+state to use when running the subgraph. If there is no continuation, a new
+state is constructed using |initialState| (Section \ref{initialstate}), with
+the input values received as arguments entered as values for the structure's
+controls. If there is a continuation, it means it is resuming execution of an
+existing state, so it reuses the state stored in the |LvKState| object,
+merely updating its timestamp.
+
+Then, it calls the main function |run| (Section \ref{run}) on the subgraph
+|subVi| and state |statek|. This produces a new state, |statek'|. If the
+scheduler queue in this state is not empty, this means that the single-shot
+execution of the graph did not finish. In this case, the interpreter stores
+this new state in a continuation object |nextk| and enqueues the structure
+in the main state so it runs again.
+
+If the scheduler queue is empty, |runStructure| runs the termination check
+|shouldStop| to determine if it should schedule a new iteration of the
+subgraph. If a new iteration is required, a new state is produced with
+|nextStep|, which increments the iterator and processes shift registers.
+
+At last, if the execution does not produce a continuation, this means the
+structure terminated its single-shot execution: the values of the indicators
+are sent out to the structure's output ports.
+
+\begin{code}
+
+runStructure subVi shouldStop state1 idx inputs =
    let
       nstates = sNodeStates state1
       nstate = index nstates idx
@@ -850,9 +981,7 @@ runStructure subVi initState shouldStop state1 idx inputs =
 
       statek = 
          case nsCont nstate of
-         Nothing -> initState
-                    $ setControlValues inputs
-                    $ initialState ts' subVi
+         Nothing -> setControlValues inputs $ initialState ts' subVi
          Just (LvKState st) -> st { sTs = ts' }
       statek'@(LvState _ qk _ _ _) = run statek subVi
       nextk
@@ -862,7 +991,7 @@ runStructure subVi initState shouldStop state1 idx inputs =
               trc ("let's go " ++ shw (i + 1)) $
               trc ("before: " ++ shw statek') $
               Just (LvKState (nextStep subVi statek' (i + 1)))
-         where (LvI32 i) = index (sControlValues statek') iIndex
+         where (LvI32 i) = index (sControlValues statek') 0
       nstate' = nstate { nsCont = nextk }
       qMe = trc ("QUEUED MYSELF? " ++ (shw $ isJust nextk) ++ "(LvN " ++ shw idx ++ ")") $ [LvElemAddr LvN idx | isJust nextk]
       state2 = state1 {
@@ -871,41 +1000,24 @@ runStructure subVi initState shouldStop state1 idx inputs =
          sNodeStates = update idx nstate' nstates
       }
       pvs = zip (indices $ vIndicators subVi) (toList $ sIndicatorValues statek')
+
+      setControlValues inputs state =
+         state {
+            sTs = sTs state + 1,
+            sControlValues = fromList $ zipWith fromMaybe (toList $ sControlValues state) inputs
+         }  
    in
-      if isJust nextk 
-      then (state2, [])
-      else (state2, pvs)
+      (state2, if isJust nextk then [] else pvs)
 
 \end{code}
 
 \begin{code}
 
-setControlValues :: [Maybe LvValue] -> LvState -> LvState
-setControlValues inputs state =
-   state {
-      sTs = sTs state + 1,
-      sControlValues = fromList $ zipWith fromMaybe (toList $ sControlValues state) inputs
-   }  
-
-\end{code}
-
-\begin{code}
-
-iIndex :: Int
-iIndex = 0 -- counter control for both 'for' and 'while'
-nIndex :: Int
-nIndex = 1 -- limit control for 'for'
-testIndex :: Int
-testIndex = 0 -- test indicator for 'while'
-nextIndex :: Int
-nextIndex = 0 -- sequence control/indicators for 'sequence'
-
-initCounter :: LvState -> LvState
-initCounter state =
-   state {
-      sTs = sTs state + 1,
-      sControlValues = update iIndex (LvI32 0) (sControlValues state)
-   }
+initCounter :: LvState -> Int -> [Maybe LvValue] -> [Maybe LvValue]
+initCounter state idx inputs =
+   case nsCont (index (sNodeStates state) idx) of
+   Nothing -> Just (LvI32 0) : tail inputs
+   _       -> inputs
 
 nextStep :: LvVI -> LvState -> Int -> LvState
 nextStep vi state i' =
@@ -915,7 +1027,7 @@ nextStep vi state i' =
       sControlValues = cvs''
    }
    where
-      cvs' = update iIndex (LvI32 i') (sControlValues state)
+      cvs' = update 0 (LvI32 i') (sControlValues state)
       cvs'' :: Seq LvValue
       cvs'' = foldl' shiftRegister cvs'
               $ zip (vIndicators vi) (toList (sIndicatorValues state))

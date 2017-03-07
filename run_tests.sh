@@ -3,7 +3,7 @@
 ok="\033[1;32mOK\033[0m"
 failed="\033[1;31mFailed\033[0m"
 
-rm .failed
+rm -f .failed
 for i in demo/*.hs
 do
 (
@@ -58,8 +58,8 @@ wait
 
 if [ -e .failed ]
 then
-   rm .failed
+   rm -f .failed
    exit 1
 fi
-rm .failed
+rm -f .failed
 exit 0
