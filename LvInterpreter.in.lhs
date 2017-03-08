@@ -1259,11 +1259,12 @@ number generator \cite{xorshift}.
 
 applyFunction "RandomNumber" w [] =
    let
-      n0 = wPrng w
-      n1 = n0 `xor` (n0 `shiftL` 13)
-      n2 = n1 `xor` (n1 `shiftR` 17)
-      n3 = n2 `xor` (n2 `shiftL` 25)
-      f  = fromIntegral (n3 + 2 ^ 31) / 2 ^ 32 
+      mask  = foldl1 (\v b -> v .|. bit b) (0:[0..31])
+      n0    = wPrng w
+      n1    = (n0 `xor` (n0 `shiftL` 13)) .&. mask
+      n2    = (n1 `xor` (n1 `shiftR` 17)) .&. mask
+      n3    = (n2 `xor` (n2 `shiftL` 25)) .&. mask
+      f     = abs $ (fromIntegral n3) / 2 ^ 32
    in (w { wPrng = n3 }, LvReturn [LvDBL f])
 
 \end{code}
