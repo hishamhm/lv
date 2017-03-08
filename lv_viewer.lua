@@ -25,6 +25,7 @@ local types = [[
 local state_grammar = re.compile([[
    LvState <- 'LvState {' {|
       {:ts:               sTs :} ', '
+      {:prng:             sPrng :} ', '
       {:sched:            sSched :} ', '
       {:node_states:      sNStates :} ', '
       {:control_values:   sCtrlVals :} ', '
@@ -32,6 +33,7 @@ local state_grammar = re.compile([[
    |} '}'
    
    sTs         <- 'sTs = ' Int
+   sPrng       <- 'sPrng = ' Int
    sSched      <- 'sSched = ' LvElemAddr_list
    sNStates    <- 'sNStates = ' Seq_LvNodeState
    sCtrlVals   <- 'sCtrlVals = ' Seq_LvValue

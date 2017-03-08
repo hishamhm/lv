@@ -262,6 +262,7 @@ object.
 -- ** {-"\hypertarget{LvState}{}"-}
 data LvState =  LvState { 
                    sTs         :: Int,
+                   sPrng       :: Int,
                    sSched      :: [LvElemAddr],
                    sNStates    :: Seq LvNodeState,
                    sCtrlVals   :: Seq LvValue,
@@ -312,7 +313,7 @@ concurrently.
 \begin{code}
 
 data LvCont  =  LvKFunction {
-                   kFn    :: LvVisibleState -> [LvValue] -> LvReturn,
+                   kFn    :: LvWorld -> [LvValue] -> (LvWorld, LvReturn),
                    kArgs  :: [LvValue]
                 }
              |  LvKState LvState
@@ -327,22 +328,26 @@ data LvReturn  =  LvReturn [LvValue]
 \end{code}
 
 In all functions implementing LabVIEW nodes, we add an additional argument
-representing read access to the external world, which we call "visible state".
-In our model, the visible state consists only of the execution timestamp,
-which we will use below as a model of a "system clock" for timer-based
-functions.
+representing access to side-effects that affect the state of the external
+world. In our model, this access consists of a read-only timestamp, which we
+will use as a model of a "system clock" for timer-based functions, and the
+read-write pseudo-random number generator (PRNG) state, which can be consumed
+and updated.
 
-This is a simplified model since it implements a read-only view of the
-external world, but it allows us to model impure functions whose effects
-depend not only on the inputs received through wires in the dataflow graph. In
-particular, this allows us to model the relationship between graph evaluation
-and time.
+This allows us to model impure functions whose effects depend not only on the
+inputs received through wires in the dataflow graph. In particular, this
+allows us to model the relationship between graph evaluation and time.
+
+Note that this is a subset of our |LvState| object, which represents the
+memory of the VI being executed. In this sense, this is the part of the
+outside world that is visible to the function.
 
 \begin{code}
  
-data LvVisibleState  =  LvVisibleState {
-                           vsTs :: Int
-                        }
+data LvWorld  =  LvWorld {
+                    wTs :: Int,
+                    wPrng :: Int
+                 }
 
 \end{code}
 
@@ -367,7 +372,7 @@ final state with an empty scheduler queue is produced.
 
 runVI :: LvVI -> IO ()
 runVI vi =
-   loop (initialState 0 vi)
+   loop (initialState 0 0 vi)
    where
       loop s = do
          print s
@@ -388,10 +393,11 @@ elements to be executed.
 
 \begin{code}
 
-initialState :: Int -> LvVI -> LvState
-initialState ts vi = 
+initialState :: Int -> Int -> LvVI -> LvState
+initialState ts prng vi = 
    LvState {
       sTs         = ts + 1,
+      sPrng       = prng,
       sCtrlVals   = fromList $ map (makeCtrlVal . snd)   (vCtrls vi),
       sIndicVals  = fromList $ map (makeIndicVal . snd)  (vIndics vi),
       sNStates    = fromList $ mapIdx makeNState         (vNodes vi),
@@ -488,10 +494,12 @@ is a simulation of a system clock, to be used by timer operations.
 
 run :: LvState -> LvVI -> LvState
 
-run s@(LvState _   []      _ _ _) _   = s
-run s@(LvState ts  (q:qs)  _ _ _) vi  =
-   let  s0 = s { sTs = ts + 1, sSched = qs }
-   in   runEvent q s0 vi
+run s vi
+ | null (sSched s) = s
+ | otherwise =
+    case sSched s of
+    (q:qs) ->  let  s0 = s { sTs = (sTs s) + 1, sSched = qs }
+               in   runEvent q s0 vi
 
 \end{code}
 
@@ -760,19 +768,20 @@ node's output ports.
 
 runNode (LvFunction name) s1 inputs idx =
    let
-      nss        = sNStates s1
-      ns         = index nss idx
-      visible s  = LvVisibleState (sTs s)
-      ret        =
+      nss      = sNStates s1
+      ns       = index nss idx
+      world s  = LvWorld { wTs = sTs s, wPrng = sPrng s }
+      ret      =
          case nsCont ns of
-         Nothing  -> applyFunction name (visible s1) inputs
-         Just k   -> kFn k              (visible s1) (catMaybes inputs)
-      (mk, q, pvs) =
+         Nothing  -> applyFunction name (world s1) inputs
+         Just k   -> kFn k              (world s1) (catMaybes inputs)
+      (w, mk, q, pvs) =
          case ret of
-         LvReturn outVals  -> ( Nothing,  [],                    zip (indices outVals) outVals )
-         LvContinue k'     -> ( Just k',  [LvElemAddr LvN idx],  [] )
+         (w, LvReturn outVals)  -> ( w, Nothing,  [],                    zip (indices outVals) outVals )
+         (w, LvContinue k')     -> ( w, Just k',  [LvElemAddr LvN idx],  [] )
+      updateWorld w s = s { sPrng = wPrng w }
    in
-      (updateNode idx s1 ns { nsCont = mk } q, pvs)
+      (updateWorld w $ updateNode idx s1 ns { nsCont = mk } q, pvs)
 
 \end{code}
 
@@ -970,13 +979,14 @@ are sent out to the structure's output ports.
 
 runStructure subvi shouldStop s1 idx inputs =
    let
-      nss  = sNStates s1
-      ns   = index nss idx
-      ts'  = sTs s1 + 1
+      nss   = sNStates s1
+      ns    = index nss idx
+      ts'   = sTs s1 + 1
+      prng  = sPrng s1
 
       sk   = 
          case nsCont ns of
-         Nothing             -> setCtrlVals inputs (initialState ts' subvi)
+         Nothing             -> setCtrlVals inputs (initialState ts' prng subvi)
          Just (LvKState st)  -> st { sTs = ts' }
 
       setCtrlVals inputs s =
@@ -985,18 +995,19 @@ runStructure subvi shouldStop s1 idx inputs =
             sCtrlVals  = fromList (zipWith fromMaybe (toList $ sCtrlVals s) inputs)
          }  
 
-      sk'@(LvState _ qk _ _ _) = run sk subvi
+      sk'  = run sk subvi
 
       nextk
-         | not (null qk)       = trc ("GOT QK " ++ shw qk ++ " IN STATEK " ++ shw sk) $ Just (LvKState sk')
-         | shouldStop sk'      = Nothing
-         | otherwise           =  let LvI32 i = index (sCtrlVals sk') 0
-                                  in Just (LvKState (nextStep subvi sk' (i + 1)))
+         | not (null (sSched sk'))  =  Just (LvKState sk')
+         | shouldStop sk'           =  Nothing
+         | otherwise                =  let LvI32 i = index (sCtrlVals sk') 0
+                                       in Just (LvKState (nextStep subvi sk' (i + 1)))
 
       qMyself = [LvElemAddr LvN idx | isJust nextk]
 
       s2 = s1 {
          sTs       = sTs sk' + 1,
+         sPrng     = sPrng sk',
          sSched    = sSched s1 ++ qMyself,
          sNStates  = update idx (ns { nsCont = nextk }) nss
       }
@@ -1048,12 +1059,30 @@ nextStep vi s i' =
 The final section of the interpreter is the implementation of the various
 operations available in the language as function nodes. These operations
 are implemented as cases for function |applyFunction|, which takes a
-string with the name of the function, an instance of the visible state,
+string with the name of the function, an instance of the outside world,
 the list of input values, and produces a return, which may be a list of
-results or a continuation.
+results or a continuation, along with the updated state of the world.
 
 \begin{code}
-applyFunction :: String -> LvVisibleState -> [Maybe LvValue] -> LvReturn
+applyFunction :: String -> LvWorld -> [Maybe LvValue] -> (LvWorld, LvReturn)
+\end{code}
+
+Since most of our functions are pure (that is, they do not read or affect the 
+outside world), it is better to define them as pure functions, removing the
+occurrences of |LvWorld| from the signature:
+
+\begin{code}
+applyPureFunction :: String -> [Maybe LvValue] -> LvReturn
+\end{code}
+
+These pure functions can then be converted to match the expected signature
+using the following combinator, which is able to convert the signature of
+|applyPureFunction| into that of |applyFunction|, by simply forwarding the
+|LvWorld| object unchanged:
+
+\begin{code}
+withWorld :: (a -> r) -> (w -> a -> (w, r))
+withWorld f = \ w args -> (w, f args)
 \end{code}
 
 Our goal in this interpreter is not to reproduce the functionality of LabVIEW
@@ -1062,29 +1091,41 @@ semantics of the dataflow language at its core. For this reason, we include
 below only a small selection of functions, which should be enough to
 illustrate the behavior of the language through examples.
 
-The simpler functions have single-line implementations. Such are the case
-of @RandomNumber@, an example of a  The more
-interesting ones delegate to auxiliary functions, which we will present
-in more detail below.
+\subsection{Pure functions}
+
+The simpler functions have single-line implementations. The more interesting
+ones delegate to auxiliary functions, which we will present in more detail
+below.
 
 \begin{code}
 
-applyFunction "+" _ args = numOp   (+)  (+)  args
-applyFunction "-" _ args = numOp   (-)  (-)  args
-applyFunction "*" _ args = numOp   (*)  (*)  args
-applyFunction "/" _ args = numOp   (/)  div  args
-applyFunction "<" _ args = boolOp  (<)  (<)  args
-applyFunction ">" _ args = boolOp  (>)  (>)  args
+applyPureFunction "+" args = numOp   (+)  (+)  args
+applyPureFunction "-" args = numOp   (-)  (-)  args
+applyPureFunction "*" args = numOp   (*)  (*)  args
+applyPureFunction "/" args = numOp   (/)  div  args
+applyPureFunction "<" args = boolOp  (<)  (<)  args
+applyPureFunction ">" args = boolOp  (>)  (>)  args
 
-applyFunction "RandomNumber" (LvVisibleState ts) [] = LvReturn [LvDBL 0.5]
+applyPureFunction "ArrayMax&Min" [Just (LvArr a)] = LvReturn (arrayMaxMin a)
 
-applyFunction "ArrayMax&Min" _ [Just (LvArr a)] = LvReturn (arrayMaxMin a)
-
-applyFunction "InsertIntoArray" _ (Just arr : Just vs : idxs) =
+applyPureFunction "InsertIntoArray" (Just arr : Just vs : idxs) =
    LvReturn [insertIntoArray arr vs (map toNumber idxs)]
    where toNumber i = if isNothing i then (-1) else (\(Just (LvI32 n)) -> n) i
 
-applyFunction "Bundle" _ args = LvReturn [LvCluster (catMaybes args)]
+applyPureFunction "Bundle" args = LvReturn [LvCluster (catMaybes args)]
+
+applyPureFunction fn args =
+   error ("No rule to apply " ++ fn ++ " " ++ show args)
+
+\end{code}
+
+\subsection{Random Number}
+
+\begin{code}
+
+applyFunction "RandomNumber" w [] =
+   let n = 0
+   in (w { wPrng = n }, LvReturn [LvI32 n])
 
 \end{code}
 
@@ -1092,24 +1133,19 @@ applyFunction "Bundle" _ args = LvReturn [LvCluster (catMaybes args)]
 
 \begin{code}
 
-applyFunction "WaitUntilNextMs" (LvVisibleState ts) [Just (LvI32 ms)] =
-   LvContinue $ LvKFunction waitUntil [LvI32 nextMs]
+applyFunction "WaitUntilNextMs" w [Just (LvI32 ms)] =
+   (w, LvContinue $ LvKFunction waitUntil [LvI32 nextMs])
    where
+      ts = wTs w
       nextMs = ts - (ts `mod` ms) + ms
-      waitUntil (LvVisibleState now) arg@[LvI32 stop]
-         | now >= stop  = LvReturn []
-         | otherwise    = LvContinue $ LvKFunction waitUntil arg
+      waitUntil w@(LvWorld now _) arg@[LvI32 stop]
+         | now >= stop  = (w, LvReturn [])
+         | otherwise    = (w, LvContinue $ LvKFunction waitUntil arg)
 
 applyFunction "WaitUntilNextMs" vst [Just (LvDBL msd)] =
    applyFunction "WaitUntilNextMs" vst [Just (LvI32 (floor msd))]
 
-\end{code}
-
-
-\begin{code}
-
-applyFunction fn _ args =
-   error ("No rule to apply " ++ fn ++ " " ++ show args)
+applyFunction n w a = (withWorld . applyPureFunction) n w a
 
 \end{code}
 
