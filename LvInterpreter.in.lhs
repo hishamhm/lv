@@ -48,6 +48,7 @@ import qualified Data.Sequence as Seq (length, take)
 import Data.Char
 import Data.List
 import Data.Maybe
+import Data.Bits
 import Data.Foldable (toList)
 import Data.Generics.Aliases (orElse)
 -- ** BEGIN CUT
@@ -372,7 +373,7 @@ final state with an empty scheduler queue is produced.
 
 runVI :: LvVI -> IO ()
 runVI vi =
-   loop (initialState 0 0 vi)
+   loop (initialState 0 42 vi)
    where
       loop s = do
          print s
@@ -661,6 +662,10 @@ all mandatory arguments must have incoming values. For structures, it means
 that all tunnels going into the structure must have values available for
 consumption.
 
+This interpreter implements a single node accepting optional inputs,
+@InsertIntoArray@ (Section \ref{arrayfns}); for all other nodes, all
+inputs are mandatary.
+
 Feedback nodes are never triggered by another node: when they receive
 a value through its input port, this value remains stored for the next
 single-shot execution of the whole graph. Constants do not have input ports,
@@ -692,6 +697,10 @@ shouldSchedule node inputs =
                   case vCtrls vi !! cidx of
                      (_, LvTunControl)  -> isNothing (index inputs cidx)
                      _                  -> False
+
+nrMandatoryInputs :: String -> Maybe Int
+nrMandatoryInputs "InsertIntoArray" = Just 2
+nrMandatoryInputs _ = Nothing
 
 indices :: [a] -> [Int]
 indices l = [0 .. (length l - 1)]
@@ -1067,18 +1076,19 @@ results or a continuation, along with the updated state of the world.
 applyFunction :: String -> LvWorld -> [Maybe LvValue] -> (LvWorld, LvReturn)
 \end{code}
 
-Since most of our functions are pure (that is, they do not read or affect the 
-outside world), it is better to define them as pure functions, removing the
-occurrences of |LvWorld| from the signature:
+However, in the spirit of dataflow, most function nodes implement pure
+functions (that is, they do not read or affect the outside world). We
+represent them as such, removing the occurrences of |LvWorld| from the
+signature:
 
 \begin{code}
 applyPureFunction :: String -> [Maybe LvValue] -> LvReturn
 \end{code}
 
-These pure functions can then be converted to match the expected signature
-using the following combinator, which is able to convert the signature of
-|applyPureFunction| into that of |applyFunction|, by simply forwarding the
-|LvWorld| object unchanged:
+To fit the interpreter's execution model, these pure functions can then be
+converted to match the expected signature using the following combinator,
+which is able to convert the signature of |applyPureFunction| into that of
+|applyFunction|, by simply forwarding the |LvWorld| object unchanged:
 
 \begin{code}
 withWorld :: (a -> r) -> (w -> a -> (w, r))
@@ -1089,67 +1099,83 @@ Our goal in this interpreter is not to reproduce the functionality of LabVIEW
 with respect to its domain in engineering, but to describe in detail the
 semantics of the dataflow language at its core. For this reason, we include
 below only a small selection of functions, which should be enough to
-illustrate the behavior of the language through examples.
+illustrate the behavior of the interpreter through examples.
 
-\subsection{Pure functions}
+The following pure functions are implemented: arithmetic and relational
+operators (Section \ref{binop}), array functions @ArrayMax&Min@ and
+@InsertIntoArray@ (Section \ref{arrayfns}), and @Bundle@ (a simple function
+which packs values into a cluster).
 
-The simpler functions have single-line implementations. The more interesting
-ones delegate to auxiliary functions, which we will present in more detail
-below.
-
-\begin{code}
-
-applyPureFunction "+" args = numOp   (+)  (+)  args
-applyPureFunction "-" args = numOp   (-)  (-)  args
-applyPureFunction "*" args = numOp   (*)  (*)  args
-applyPureFunction "/" args = numOp   (/)  div  args
-applyPureFunction "<" args = boolOp  (<)  (<)  args
-applyPureFunction ">" args = boolOp  (>)  (>)  args
-
-applyPureFunction "ArrayMax&Min" [Just (LvArr a)] = LvReturn (arrayMaxMin a)
-
-applyPureFunction "InsertIntoArray" (Just arr : Just vs : idxs) =
-   LvReturn [insertIntoArray arr vs (map toNumber idxs)]
-   where toNumber i = if isNothing i then (-1) else (\(Just (LvI32 n)) -> n) i
-
-applyPureFunction "Bundle" args = LvReturn [LvCluster (catMaybes args)]
-
-applyPureFunction fn args =
-   error ("No rule to apply " ++ fn ++ " " ++ show args)
-
-\end{code}
-
-\subsection{Random Number}
+To demonstrate impure functions, the interpreter includes the timer
+function @WaitUntilNextMs@ (Section \ref{waituntilnextms}) and the
+PRNG function @RandomNumber@ (Section \ref{randomnumber}).
 
 \begin{code}
 
-applyFunction "RandomNumber" w [] =
-   let n = 0
-   in (w { wPrng = n }, LvReturn [LvI32 n])
-
-\end{code}
-
-\subsection{Wait Until Next Ms}
-
-\begin{code}
-
-applyFunction "WaitUntilNextMs" w [Just (LvI32 ms)] =
-   (w, LvContinue $ LvKFunction waitUntil [LvI32 nextMs])
+applyPureFunction name =
+   case name of
+   "+"                -> numOp   (+)  (+)
+   "-"                -> numOp   (-)  (-)
+   "*"                -> numOp   (*)  (*)
+   "/"                -> numOp   (/)  div
+   "<"                -> boolOp  (<)  (<)
+   ">"                -> boolOp  (>)  (>)
+   "ArrayMax&Min"     -> returnArrayMaxMin
+   "InsertIntoArray"  -> returnInsertIntoArray
+   "Bundle"           -> returnBundle
+   otherwise          -> error ("No rule to apply " ++ name)
    where
-      ts = wTs w
-      nextMs = ts - (ts `mod` ms) + ms
-      waitUntil w@(LvWorld now _) arg@[LvI32 stop]
-         | now >= stop  = (w, LvReturn [])
-         | otherwise    = (w, LvContinue $ LvKFunction waitUntil arg)
-
-applyFunction "WaitUntilNextMs" vst [Just (LvDBL msd)] =
-   applyFunction "WaitUntilNextMs" vst [Just (LvI32 (floor msd))]
-
-applyFunction n w a = (withWorld . applyPureFunction) n w a
+      returnArrayMaxMin [Just (LvArr a)] =
+         LvReturn (arrayMaxMin a)
+      returnInsertIntoArray (Just arr : Just vs : idxs) =
+         LvReturn [insertIntoArray arr vs (map toNumber idxs)]
+         where toNumber i =  if isNothing i
+                             then (-1)
+                             else (\(Just (LvI32 n)) -> n) i
+      returnBundle args =
+         LvReturn [LvCluster (catMaybes args)]
 
 \end{code}
 
-\subsection{Array Max \& Min}
+\subsection{Numeric and relational operators}
+\label{binop}
+
+LobVIEW nodes automatically perform coercions between integers and doubles.
+Since ports in our implementation do not carry type information (it assumes
+the input VI has been type-checked prior to execution), we pragmatically
+include the coercion logic directly in the implementation for numeric and
+relational operator nodes, codified in the |binOp| function, to which the
+|numOp| and |boolOp| functions below delegate.
+
+It is worth noting that the LabVIEW UI gives visual feedback when a coercion
+takes place, by adding a small circle attached to the input port. This could
+be considered an automatically inserted coercion node, not unlike the automatic
+insertion of feedback nodes. We chose, however, not to implement coercion
+as a separate node, for reasons of simplicity.
+
+\begin{code}
+
+numOp :: (Double -> Double -> Double)
+         -> (Int -> Int -> Int) -> [Maybe LvValue] -> LvReturn
+numOp opD opI = binOp opD LvDBL opI LvI32
+
+boolOp :: (Double -> Double -> Bool)
+          -> (Int -> Int -> Bool) -> [Maybe LvValue] -> LvReturn
+boolOp opD opI = binOp opD LvBool opI LvBool
+
+binOp :: (Double -> Double -> t) -> (t -> LvValue)
+         -> (Int -> Int -> t1) -> (t1 -> LvValue)
+         -> [Maybe LvValue] -> LvReturn
+binOp opD tD _ _  [Just (LvDBL a),  Just (LvDBL b)]  = LvReturn [tD (opD a b)]
+binOp opD tD _ _  [Just (LvI32 a),  Just (LvDBL b)]  = LvReturn [tD (opD (fromIntegral a) b)]
+binOp opD tD _ _  [Just (LvDBL a),  Just (LvI32 b)]  = LvReturn [tD (opD a (fromIntegral b))]
+binOp _ _ opI tI  [Just (LvI32 a),  Just (LvI32 b)]  = LvReturn [tI (opI a b)]
+binOp _ _ _   _     _                                  = undefined
+
+\end{code}
+
+\subsection{Array functions: @Array Max \& Min@ and @InsertIntoArray@}
+\label{arrayfns}
 
 \begin{code}
 arrayMaxMin a =
@@ -1163,10 +1189,7 @@ arrayMaxMin a =
                                                    then (x,i)
                                                    else (y,j))
                                   (zip l (indices l))
-
 \end{code}
-
-\subsection{Insert Into Array}
 
 In LabVIEW, the "Insert Into Array" node has a variable number of indexing
 inputs depending on the number of dimensions of the array connected to it, but
@@ -1226,33 +1249,43 @@ insertIntoArray vx vy idxs =
 
 \end{code}
 
-\subsection{Numeric and relational operators}
+\subsection{Random Number}
+\label{randomnumber}
 
-The |numOp| and |boolOp| functions apply binary operations implementing
-coercion rules through the auxiliary function |binOp|.
+The function implements the 32-bit variant of the Xorshift pseudo-random
+number generator \cite{xorshift}.
 
 \begin{code}
 
-binOp :: (Double -> Double -> t) -> (t -> LvValue)
-         -> (Int -> Int -> t1) -> (t1 -> LvValue)
-         -> [Maybe LvValue] -> LvReturn
-binOp opD typD _ _  [Just (LvDBL a),  Just (LvDBL b)]  = LvReturn [typD (opD a b)]
-binOp opD typD _ _  [Just (LvI32 a),  Just (LvDBL b)]  = LvReturn [typD (opD (fromIntegral a) b)]
-binOp opD typD _ _  [Just (LvDBL a),  Just (LvI32 b)]  = LvReturn [typD (opD a (fromIntegral b))]
-binOp _ _ opI typI  [Just (LvI32 a),  Just (LvI32 b)]  = LvReturn [typI (opI a b)]
-binOp _ _ _   _     _                                  = undefined
+applyFunction "RandomNumber" w [] =
+   let
+      n0 = wPrng w
+      n1 = n0 `xor` (n0 `shiftL` 13)
+      n2 = n1 `xor` (n1 `shiftR` 17)
+      n3 = n2 `xor` (n2 `shiftL` 25)
+      f  = fromIntegral (n3 + 2 ^ 31) / 2 ^ 32 
+   in (w { wPrng = n3 }, LvReturn [LvDBL f])
 
-numOp :: (Double -> Double -> Double)
-         -> (Int -> Int -> Int) -> [Maybe LvValue] -> LvReturn
-numOp opD opI = binOp opD LvDBL opI LvI32
+\end{code}
 
-boolOp :: (Double -> Double -> Bool)
-          -> (Int -> Int -> Bool) -> [Maybe LvValue] -> LvReturn
-boolOp opD opI = binOp opD LvBool opI LvBool
+\subsection{Wait Until Next Ms}
+\label{waituntilnextms}
 
-nrMandatoryInputs :: String -> Maybe Int
-nrMandatoryInputs "InsertIntoArray" = Just 2
-nrMandatoryInputs _ = Nothing
+\begin{code}
+
+applyFunction "WaitUntilNextMs" w [Just (LvI32 ms)] =
+   (w, LvContinue $ LvKFunction waitUntil [LvI32 nextMs])
+   where
+      ts = wTs w
+      nextMs = ts - (ts `mod` ms) + ms
+      waitUntil w@(LvWorld now _) arg@[LvI32 stop]
+         | now >= stop  = (w, LvReturn [])
+         | otherwise    = (w, LvContinue $ LvKFunction waitUntil arg)
+
+applyFunction "WaitUntilNextMs" vst [Just (LvDBL msd)] =
+   applyFunction "WaitUntilNextMs" vst [Just (LvI32 (floor msd))]
+
+applyFunction n w a = (withWorld . applyPureFunction) n w a
 
 \end{code}
 
