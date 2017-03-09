@@ -104,10 +104,10 @@ interpreter recursively, declaring subgraphs as |LvVI| objects. For this
 reason, we use controls and indicators not only to represent GUI objects of
 the front panel, but also inputs and outputs of subgraphs. For this reason, we
 declare a number of types of controls: a plain control which corresponds to a
-GUI object; an "auto" control that represents an automatically-generated input
-value, such as the increment count in a for-loop; a "tunnel" control, which is
+GUI object; an ``auto'' control that represents an automatically-generated input
+value, such as the increment count in a for-loop; a ``tunnel'' control, which is
 an input that connects data from the enclosing graph to the subgraph; and a
-"shift-register" control, which is the input terminator for shift registers (a
+``shift-register'' control, which is the input terminator for shift registers (a
 construct to send data across iterations of a loop).
 
 \begin{code}
@@ -124,20 +124,20 @@ An indicator in LabVIEW is an output widget in the VI's front panel. Like
 controls, indicators are represented both in the front panel (as a GUI widget)
 and in the block diagram (as a connectable object). For the same reasons as
 explained above for controls, we have different kinds of indicators: the plain
-indicator, which represents GUI indicators proper; the "shift-register"
+indicator, which represents GUI indicators proper; the ``shift-register''
 indicator, which sends data to its respective shift-register control (represented
 by the numeric index of the control in its constructor) for the next execution
-of a loop; and "tunnel" indicators, which send data out of the subgraph back
+of a loop; and ``tunnel'' indicators, which send data out of the subgraph back
 to the enclosing graph.
 
-Tunnel indicators can be of different types: "last value", which sends out the
-value produced by the last iteration of the subgraph; "auto-indexing", which
+Tunnel indicators can be of different types: ``last value'', which sends out the
+value produced by the last iteration of the subgraph; ``auto-indexing'', which
 produces an array accumulating all elements received by the tunnel across all
-iterations of the subgraph; and "concatenating", which concatenates all
-elements received. Here, we implement the "last value" and "auto-indexing"
-modes, since the "concatenating" mode is a mere convenience, that could be
+iterations of the subgraph; and ``concatenating'', which concatenates all
+elements received. Here, we implement the ``last value'' and ``auto-indexing''
+modes, since the ``concatenating'' mode is a mere convenience, that could be
 achieved by concatenating the elements of the array returned in the
-"auto-indexing" mode.
+``auto-indexing'' mode.
 
 The LabVIEW interface enables auto-indexing by default when sending data
 out of for-loops, but this can be overridden by the user in the UI.
@@ -191,7 +191,7 @@ data LvStrucType  = LvWhile
 LabVIEW supports a large number of primitive data types. Here, we implement
 four primitive data types (floating-point and integer numbers, string and
 boolean), the \emph{cluster} type, which implements a heterogeneous tuple of
-values (working like a record or "struct"), and homogeneous arrays.
+values (working like a record or ``struct''), and homogeneous arrays.
 
 We chose to implement only one floating-point and one integer type. Besides
 the types listed here, LabVIEW includes the following numeric types in total:
@@ -331,7 +331,7 @@ data LvReturn  =  LvReturn [LvValue]
 In all functions implementing LabVIEW nodes, we add an additional argument
 representing access to side-effects that affect the state of the external
 world. In our model, this access consists of a read-only timestamp, which we
-will use as a model of a "system clock" for timer-based functions, and the
+will use as a model of a ``system clock'' for timer-based functions, and the
 read-write pseudo-random number generator (PRNG) state, which can be consumed
 and updated.
 
@@ -759,6 +759,7 @@ runNode (LvFeedbackNode initVal) s1 inputs _ =
 \end{code}
 
 \subsection{Function nodes}
+\label{functionnodes}
 
 When running a function node, the interpreter first checks if it has an
 existing continuation pending for the node. If there is one, it resumes the
@@ -1102,13 +1103,13 @@ below only a small selection of functions, which should be enough to
 illustrate the behavior of the interpreter through examples.
 
 The following pure functions are implemented: arithmetic and relational
-operators (Section \ref{binop}), array functions @ArrayMax&Min@ and
-@InsertIntoArray@ (Section \ref{arrayfns}), and @Bundle@ (a simple function
+operators (Section \ref{binop}), array functions @Array Max & Min@ and
+@Insert Into Array@ (Section \ref{arrayfns}), and @Bundle@ (a simple function
 which packs values into a cluster).
 
 To demonstrate impure functions, the interpreter includes the timer
-function @WaitUntilNextMs@ (Section \ref{waituntilnextms}) and the
-PRNG function @RandomNumber@ (Section \ref{randomnumber}).
+function @Wait Until Next Ms@ (Section \ref{waituntilnextms}) and the
+PRNG function @Random Number@ (Section \ref{randomnumber}).
 
 \begin{code}
 
@@ -1174,8 +1175,28 @@ binOp _ _ _   _     _                                  = undefined
 
 \end{code}
 
-\subsection{Array functions: @Array Max \& Min@ and @InsertIntoArray@}
+\subsection{Array functions: @Array Max \& Min@ and @Insert Into Array@}
 \label{arrayfns}
+
+Representing aggregate data structures and processing them efficiently is a recognized
+issue in dataflow languages \cite{advances}. LabVIEW includes support for arrays and
+clusters, and provides a large library of functions to support these data types. We
+illustrate two such functions in the interpreter. 
+
+@Array Max & Min@ is a function which takes an array and produces four output
+values: the maximum value of the array and its index, the minimum value of the
+array and its index. The design of this node reflects one concern which
+appears often in the LabVIEW documentation and among their users: avoiding
+excessive array copying. While languages providing similar functionality
+typically provide separate functions for @min@ and @max@, here the language
+provides all four values at once, to dissuade the user from processing the
+array multiple times in case more than one value is needed. LabVIEW also
+provides a structure called @In Place Element Structure@, not implemented
+in this interpreter, where an array and one or more indices are entered as
+inputs, producing input and output tunnels for each index, so that values
+can be replaced in an aggregate data structure without producing copies.
+More recent versions of LabVIEW avoid array copying through optimization,
+reducing the usefulness of this structure.
 
 \begin{code}
 arrayMaxMin a =
@@ -1191,16 +1212,32 @@ arrayMaxMin a =
                                   (zip l (indices l))
 \end{code}
 
-In LabVIEW, the "Insert Into Array" node has a variable number of indexing
-inputs depending on the number of dimensions of the array connected to it, but
-only one of these can be connected at a time. Its behavior changes depending
-on which of these inputs are connected: for example, when inserting a 1D array
-into a 2D array, if the first indexing input is connected, it inserts a new
-row into the matrix; if the second indexing output is connected, it inserts a
-new column. When inserting into a $n$-dimensional array, the value to be inserted
-must be either an $n$ or $(n-1)$-dimensional array (or in the case of inserting
-into a 1-D array, it must be either a 1-D array or an element of the array's
-base type).
+An example of a surprisingly large amount of functionality condensed into one
+function node is LabVIEW's @Insert Into Array@ operation. To insert into an
+array |x| a value |y|, this nodes features as input ports the target array
+(|x|), the data to be inserted (|y|, which may also be an array) and one
+indexing input port for each dimension of |x|. However, only one indexing port
+may be connected.
+
+The behavior of the function changes depending on which of the inputs are
+connected and what are the number of dimensions of array |x| and data |y|.
+
+Given a $n$-dimensional array |x|, value |y| must be either an $n$ or
+$(n-1)$-dimensional array (or in the case of inserting into a 1-D array, it
+must be either a 1-D array or an element of the array's base type).
+
+For example, if |x| is a 2D array $p \times q$ and |y| is a 1D array of size
+$n$, if the first indexing input is connected, it inserts a new row into the
+matrix, producing an array $p+1 \times q$; if the second index is connected,
+it inserts a new column, and the resulting array size is $p \times q+1$. This
+also works in higher dimensions: for example, one can insert a 2D matrix into
+a 3D array along one of its three axes.
+
+When the dimensions are the same, the results are different: inserting an
+array of size $m \times n$ into an array of size $p \times q$ may produce an
+array of size $p+m \times q$ or $p \times q+n$. For all operations, the
+dimensions of |y| are cropped or expanded with null values (such as zero or
+the empty string) to match the dimensions of |x|.
 
 \begin{code}
 
@@ -1252,8 +1289,14 @@ insertIntoArray vx vy idxs =
 \subsection{Random Number}
 \label{randomnumber}
 
-The function implements the 32-bit variant of the Xorshift pseudo-random
-number generator \cite{xorshift}.
+@Random Number@ is an example of an impure function which produces a
+side-effect beyond the value sent through its output port. In our definition
+of the ``outside world'' which is part of the ongoing state computed in
+our model, we have the state of the pseudo-random number generator, which
+needs to be updated each time this node produces a value.
+
+In this interpreter, we implement the PRNG using the 32-bit variant of the
+Xorshift algorithm \cite{xorshift}.
 
 \begin{code}
 
@@ -1272,6 +1315,26 @@ applyFunction "RandomNumber" w [] =
 \subsection{Wait Until Next Ms}
 \label{waituntilnextms}
 
+Node @Wait Until Next Ms@ demonstrates both the use a value coming
+from the outside world (the timestamp) and the use of a continuation.
+Its goal is to wait until the timestamp matches or exceeds the next
+multiple of the given argument. Using this object in loop structures
+that are running concurrently causes them to iterate in lockstep,
+if the inserted delay is long enough. This is a simple way to produce
+an acceptable level of synchronization for the typical domain of
+instrument data acquisition which LabVIEW specializes on.
+
+When the function is applied, it immediately returns a continuation,
+containing the function |waitUntil| and the target timestamp |nextMs| as its
+argument. As we saw in Section \ref{functionnodes}, this will cause the
+function to be rescheduled. The implementation of |waitUntil| checks
+the current time received in the |LvWorld| argument: if it has
+not reached the target time, the function returns another continuation
+rescheduling itself; otherwise, it returns producing no value, since
+the function node for this operation has no output ports. This node
+relies on the fact that a (sub)graph as a whole keeps running as long
+as some node is scheduled.
+
 \begin{code}
 
 applyFunction "WaitUntilNextMs" w [Just (LvI32 ms)] =
@@ -1285,6 +1348,13 @@ applyFunction "WaitUntilNextMs" w [Just (LvI32 ms)] =
 
 applyFunction "WaitUntilNextMs" vst [Just (LvDBL msd)] =
    applyFunction "WaitUntilNextMs" vst [Just (LvI32 (floor msd))]
+
+\end{code}
+
+Finally, we finish the definition of |applyFunction| by delegating
+the remaining functions to |applyPureFunction|.
+
+\begin{code}
 
 applyFunction n w a = (withWorld . applyPureFunction) n w a
 
