@@ -76,8 +76,10 @@ connecting different kinds of objects. In LabVIEW terminology, these objects
 are called \emph{controls}, which are input-only, \emph{indicators}, which are
 output-only, and \emph{nodes}, which are all other operations. Throughout the
 implementation, we will use this nomenclature; in particular the name ``node''
-will be used only for graph elements which are not controls or indicators.
-Graph elements are connected through wires. 
+will be used only for graph objects which are not controls or indicators.
+Graph objects are connected through wires. To avoid confusion with objects
+in the interpreter implementation, we will refer to graph objects (controls,
+indicators and nodes) as \emph{elements}.
 
 We represent a VI as a record containing a series of lists, enumerating
 controls, indicators, nodes and wires. Controls, indicators and nodes are
@@ -102,8 +104,8 @@ LabVIEW includes structured graphs composed of subgraphs representing
 structures such as for- and while-loops, we build these graphs in the
 interpreter recursively, declaring subgraphs as |LvVI| objects. For this
 reason, we use controls and indicators not only to represent GUI objects of
-the front panel, but also inputs and outputs of subgraphs. For this reason, we
-declare a number of types of controls: a plain control which corresponds to a
+the front panel, but also inputs and outputs of subgraphs. To do this, we
+declare a number of types of controls: a plain control that corresponds to a
 GUI object; an ``auto'' control that represents an automatically-generated input
 value, such as the increment count in a for-loop; a ``tunnel'' control, which is
 an input that connects data from the enclosing graph to the subgraph; and a
@@ -124,19 +126,19 @@ An indicator in LabVIEW is an output widget in the VI's front panel. Like
 controls, indicators are represented both in the front panel (as a GUI widget)
 and in the block diagram (as a connectable object). For the same reasons as
 explained above for controls, we have different kinds of indicators: the plain
-indicator, which represents GUI indicators proper; the ``shift-register''
+indicator, which represents a GUI indicator proper; the ``shift-register''
 indicator, which sends data to its respective shift-register control (represented
 by the numeric index of the control in its constructor) for the next execution
-of a loop; and ``tunnel'' indicators, which send data out of the subgraph back
+of a loop; and the ``tunnel'' indicator, which sends data out of the subgraph back
 to the enclosing graph.
 
 Tunnel indicators can be of different types: ``last value'', which sends out the
 value produced by the last iteration of the subgraph; ``auto-indexing'', which
-produces an array accumulating all elements received by the tunnel across all
+produces an array accumulating all values received by the tunnel across all
 iterations of the subgraph; and ``concatenating'', which concatenates all
-elements received. Here, we implement the ``last value'' and ``auto-indexing''
-modes, since the ``concatenating'' mode is a mere convenience, that could be
-achieved by concatenating the elements of the array returned in the
+values received. Here, we implement the ``last value'' and ``auto-indexing''
+modes, since the ``concatenating'' mode is a mere convenience that could be
+achieved by concatenating the values of the array returned in the
 ``auto-indexing'' mode.
 
 The LabVIEW interface enables auto-indexing by default when sending data
@@ -156,27 +158,30 @@ data LvTunnelMode  =  LvAutoIndexing
 \end{code}
 
 There are several kinds of nodes in LabVIEW. The vast majority are functions,
-which implement various operations. Depending on the function, identified here
-by their name, they can zero or more input ports, and zero or more output ports.
+but there are also control structures, constants and feedback nodes.
+
+Functions are identified in our implementation by their their names. They can
+have zero or more input ports, and zero or more output ports.
+
+There are various kinds of control structures. Due to the fact that many of
+them share code in our implementation, we grouped them in the |LvStructure|
+type constructor: those are while-loops, for-loops, sequences, and sub-VIs.
+The case-structure controls a list of sub-VIs, and for this reason is handled
+separately with the |LvCase| constructor.
 
 A constant is a node that holds a value. It has a single output port and
 immediately fires its value.
 
-There are various kinds of control structures. Most of them contain a single
-subgraph, and due to their shared implementation, we grouped them in the 
-|LvStructure| type constructor: those are while-loops, for-loops, sequences,
-and sub-VIs. The case-structure controls a list of sub-VIs, and for this
-reason is handled separately with the |LvCase| constructor.
-
 A feedback node holds the value it receives through its input port and fires
-it the next time the program is executed.
+it the next time the program is executed, when running in continuous mode
+as explained in Section~\ref{sub:LabVIEW-execution-modes}.
 
 \begin{code}
 
 data LvNode  =  LvFunction String
-             |  LvConstant LvValue
              |  LvStructure LvStrucType LvVI
              |  LvCase [LvVI]
+             |  LvConstant LvValue
              |  LvFeedbackNode LvValue
    deriving Show
 
@@ -188,22 +193,21 @@ data LvStrucType  = LvWhile
 
 \end{code}
 
-LabVIEW supports a large number of primitive data types. Here, we implement
-four primitive data types (floating-point and integer numbers, string and
-boolean), the \emph{cluster} type, which implements a heterogeneous tuple of
-values (working like a record or ``struct''), and homogeneous arrays.
+LabVIEW supports a large number of primitive numeric types: single, double and
+extended-precision floating-point numbers; fixed-point numbers; signed and
+unsigned integers of 8, 16, 32 and 64 bits; single, double and
+extended-precision complex numbers. We chose to implement only one
+floating-point and one integer type.
 
-We chose to implement only one floating-point and one integer type. Besides
-the types listed here, LabVIEW includes the following numeric types in total:
-extended and single-precision floating-point numbers; fixed-point numbers;
-signed and unsigned integers of 8, 16, 32 and 64 bits; single, double and
-extended-precision complex numbers.
+Besides these, the interpreter also supports the following types: strings;
+booleans; the \emph{clusters}, which are a heterogeneous tuple of values
+(working like a record or ``struct''); and homogeneous arrays.
 
 Unlike LabVIEW, our implementation allows arbitrarily recursive types (e.g. we
-support a cluster of arrays of arrays of clusters). Since we assume that
-programs entered in the output are properly type-checked, implementing the
-same restrictions that LabVIEW enforces to aggregate data types could be
-easily done in the type-checking step.
+support a cluster of arrays of arrays of clusters). Since we assume that input
+programs are properly type-checked, implementing the same restrictions that
+LabVIEW enforces to aggregate data types could be easily done in the
+type-checking step.
 
 \begin{code}
 
@@ -296,7 +300,7 @@ data LvNodeState =  LvNodeState {
 
 For functions, we use continuations to model computations that run over time.
 An operation that needs to continue running beyond the current timestamp
-implements the rest of the computation as a separate function, that will be
+implements the rest of the computation as a separate function, which will be
 scheduled to run at the next time tick. In the |LvKFunction| constructor we
 store the continuation function itself (|kFn|) and the values that will be
 passed to it (|kArgs|). These values act as the operation's internal memory.
@@ -328,20 +332,20 @@ data LvReturn  =  LvReturn [LvValue]
 
 \end{code}
 
-In all functions implementing LabVIEW nodes, we add an additional argument
-representing access to side-effects that affect the state of the external
-world. In our model, this access consists of a read-only timestamp, which we
-will use as a model of a ``system clock'' for timer-based functions, and the
-read-write pseudo-random number generator (PRNG) state, which can be consumed
-and updated.
+In all functions implementing LabVIEW nodes, we include an additional argument
+and an additional result representing access to side-effects that affect the
+state of the external world.
 
-This allows us to model impure functions whose effects depend not only on the
-inputs received through wires in the dataflow graph. In particular, this
-allows us to model the relationship between graph evaluation and time.
+These extra values allow us to model impure functions whose effects depend not
+only on the inputs received through wires in the dataflow graph. In
+particular, this allows us to model the relationship between graph evaluation
+and time.
 
-Note that this is a subset of our |LvState| object, which represents the
-memory of the VI being executed. In this sense, this is the part of the
-outside world that is visible to the function.
+In our model, a simplified view of this ``external world'' is implemented as
+the |LvWorld| type. It consists of a read-only timestamp, which we will use as
+a model of a ``system clock'' for timer-based functions, and the read-write
+pseudo-random number generator (PRNG) state, which can be consumed and
+updated.
 
 \begin{code}
  
@@ -352,6 +356,10 @@ data LvWorld  =  LvWorld {
 
 \end{code}
 
+Note that |LvWorld| is a subset of our |LvState| object, which represents the
+memory of the VI being executed. In this sense, this is the part of the
+outside world that is visible to the function.
+
 \section{Execution}
 
 The execution mode of LabVIEW is data-driven. The user enters data via
@@ -359,9 +367,9 @@ controls, which propagate their values through other nodes, eventually
 reaching indicators, which provide feedback to the user via their
 representations in the front panel.
 
-This interpreter models a single-shot execution (as discussed in Section
-\ref{sub:LabVIEW-execution-modes}). Continuous execution is semantically
-equivalent as enclosing the entire VI in a while-loop.
+This interpreter models a single-shot execution (as discussed in
+Section~\ref{sub:LabVIEW-execution-modes}). Continuous execution is
+semantically equivalent as enclosing the entire VI in a while-loop.
 
 \subsection{Main loop}
 
@@ -437,12 +445,12 @@ emptyInputs n = fromList (replicate n Nothing)
 
 The initial schedule is defined as follows. All controls, constants and
 feedback nodes are queued. Then, all function and structure nodes which do not
-depend on other inputs are queued as well. Here, we make a simplifcation and
+depend on other inputs are queued as well. Here, we make a simplification and
 assume that VIs do not have any functions with mandatory inputs missing. This
 could be verified in a type-checking step prior to execution.
 
 Note also that the code below implies the initial schedule follows the order
-of node given in the description of the |LvVI| record, leading to a
+of nodes given in the description of the |LvVI| record, leading to a
 deterministic execution of our intpreter. LabVIEW does not specify a
 particular order.
 
@@ -663,7 +671,7 @@ that all tunnels going into the structure must have values available for
 consumption.
 
 This interpreter implements a single node accepting optional inputs,
-@InsertIntoArray@ (Section \ref{arrayfns}); for all other nodes, all
+@InsertIntoArray@ (Section~\ref{arrayfns}); for all other nodes, all
 inputs are mandatary.
 
 Feedback nodes are never triggered by another node: when they receive
@@ -744,8 +752,8 @@ runNode (LvConstant value) s1 _ _ =
 A feedback node behaves like a constant node: it sends out the value it stores
 through its output port. In spite of having an input port, a feedback node is
 only triggered at the beginning of the execution of the graph, as determined
-by the initial state (Section \ref{initialstate}) and firing rules (Section
-\ref{firing}).
+by the initial state (Section~\ref{initialstate}) and firing rules
+(Section~\ref{firing}).
 
 In our model, an |LvFeedbackNode| always takes an initialization value. In the
 LabVIEW UI, this value can be left out, in which case a default value for the
@@ -796,14 +804,14 @@ runNode (LvFunction name) s1 inputs idx =
 \end{code}
 
 
-\subsection{Structures}
+\subsection{Control structures}
 
-The interpreter supports five kinds of structures: for-loop, while-loop,
-sequence, case and sub-VI. They are all implemented similarly, by running a
-subgraph (itself represented as an instance of |LvVI|, like the main graph),
-and storing a state object for this subgraph as a continuation object of the
-node state for the enclosing graph (represented as |LvState|, like the main
-state). Running this subgraph may take several evaluation steps, so the
+The interpreter supports five kinds of control structures: for-loop,
+while-loop, sequence, case and sub-VI. They are all implemented similarly, by
+running a subgraph (itself represented as an instance of |LvVI|, like the main
+graph), and storing a state object for this subgraph as a continuation object
+of the node state for the enclosing graph (represented as |LvState|, like the
+main state). Running this subgraph may take several evaluation steps, so the
 enclosing graph will continuously queue it for execution until it decides it
 should finish running. Each time the scheduler of the enclosing graph triggers
 the structure node, it will run the subgraph consuming one event of the
@@ -843,10 +851,10 @@ runNode (LvStructure LvFor subvi) s1 inputs idx =
 \end{code}
 
 The while-loop structure in LabVIEW always provides an iteration counter,
-implemented in the interpreter as a counter control at index 0.
-As in the for-loop, it is initialized using helper function |initCounter|.
-The termination function for the while-loop checks for the boolean
-value at the indicator at index 0.
+implemented in the interpreter as a counter control at index 0. As in the
+for-loop, it is initialized using the helper function |initCounter|. The
+termination function for the while-loop checks for the boolean value at the
+indicator at index 0.
 
 \begin{code}
 
@@ -896,11 +904,11 @@ we simply use an integer.
 
 When a case node is triggered, |runNode| needs to choose which VI to use with
 |runStructure|. In its first execution, it reads from the input data sent to
-control 0; it subsequent executions, when those inputs are no longer
-available, it reads directly from the control value, which it stores in the
+control 0; in subsequent executions, when those inputs are no longer
+available, it reads directly from the control value, which is stored in the
 node state. Note that since case VIs have the same set of controls and
 indicators, they are structurally equivalent, and the initialization routine
-in Section \ref{initialstate} simply uses the first case when constructing the
+in Section~\ref{initialstate} simply uses the first case when constructing the
 initial empty state.
 
 A case subgraph does not iterate: it may take several schedule events to run
@@ -948,8 +956,8 @@ runNode (LvStructure LvSubVI subvi) s1 inputs idx =
 The core to the execution of all structure nodes is the |runStructure|
 function, which we present here. This function takes as arguments
 the subgraph to execute, the termination function to apply, the
-enclosing graph's state, the index of the structure in the enclosing
-VI, and returns a pair with the new state and a list of port-value
+enclosing graph's state, and the index of the structure in the enclosing
+VI; it returns a pair with the new state and a list of port-value
 pairs to fire through output ports. 
 
 \begin{code}
@@ -963,13 +971,13 @@ runStructure ::  LvVI
 
 Its execution works as follows. First, it determines |sk|, which is the
 state to use when running the subgraph. If there is no continuation, a new
-state is constructed using |initialState| (Section \ref{initialstate}), with
+state is constructed using |initialState| (Section~\ref{initialstate}), with
 the input values received as arguments entered as values for the structure's
 controls. If there is a continuation, it means it is resuming execution of an
 existing state, so it reuses the state stored in the |LvKState| object,
 merely updating its timestamp.
 
-Then, it calls the main function |run| (Section \ref{run}) on the subgraph
+Then, it calls the main function |run| (Section~\ref{run}) on the subgraph
 |subvi| and state |sk|. This produces a new state, |sk'|. If the
 scheduler queue in this state is not empty, this means that the single-shot
 execution of the graph did not finish. In this case, the interpreter stores
@@ -1029,12 +1037,12 @@ runStructure subvi shouldStop s1 idx inputs =
 
 \end{code}
 
-Structure nodes use the following auxiliary functions, already mentioned above.
-Function |initCounter| checks if the node state has a continuation, and initializes
-the iteration counter if it doesn't. Function |nextStep| resets the scheduler for
-the state of the subgraph, and implements the shift register logic, copying values
-from indicators marked as |LvSRIndicator| to their corresponding controls in the
-new state.
+Structure nodes use the following auxiliary functions, already mentioned
+above. Function |initCounter| checks whether the node state has a
+continuation, and initializes the iteration counter if it doesn't. Function
+|nextStep| resets the scheduler for the state of the subgraph, and implements
+the shift register logic, copying values from indicators marked as
+|LvSRIndicator| to their corresponding controls in the new state.
 
 \begin{code}
 
@@ -1103,13 +1111,13 @@ below only a small selection of functions, which should be enough to
 illustrate the behavior of the interpreter through examples.
 
 The following pure functions are implemented: arithmetic and relational
-operators (Section \ref{binop}), array functions @Array Max & Min@ and
-@Insert Into Array@ (Section \ref{arrayfns}), and @Bundle@ (a simple function
+operators (Section~\ref{binop}), array functions @Array Max & Min@ and
+@Insert Into Array@ (Section~\ref{arrayfns}), and @Bundle@ (a simple function
 which packs values into a cluster).
 
 To demonstrate impure functions, the interpreter includes the timer
-function @Wait Until Next Ms@ (Section \ref{waituntilnextms}) and the
-PRNG function @Random Number@ (Section \ref{randomnumber}).
+function @Wait Until Next Ms@ (Section~\ref{waituntilnextms}) and the
+PRNG function @Random Number@ (Section~\ref{randomnumber}).
 
 \begin{code}
 
@@ -1151,8 +1159,12 @@ relational operator nodes, codified in the |binOp| function, to which the
 It is worth noting that the LabVIEW UI gives visual feedback when a coercion
 takes place, by adding a small circle attached to the input port. This could
 be considered an automatically inserted coercion node, not unlike the automatic
-insertion of feedback nodes. We chose, however, not to implement coercion
-as a separate node, for reasons of simplicity.
+insertion of feedback nodes. However, since these are not separate nodes in
+LabVIEW (for instance, they cannot be probed as separate objects by the
+LabVIEW debugging facilities, unlike feedback nodes), we chose to not implement
+them as separate nodes, so keep node structure in input programs for this
+interpreter more alike to that of actual LabVIEW programs.
+
 
 \begin{code}
 
@@ -1175,28 +1187,29 @@ binOp _ _ _   _     _                                  = undefined
 
 \end{code}
 
-\subsection{Array functions: @Array Max \& Min@ and @Insert Into Array@}
+\subsection{Array functions: @Array Max & Min@ and @Insert Into Array@}
 \label{arrayfns}
 
 Representing aggregate data structures and processing them efficiently is a recognized
-issue in dataflow languages \cite{advances}. LabVIEW includes support for arrays and
+issue in dataflow languages~\cite{advances}. LabVIEW includes support for arrays and
 clusters, and provides a large library of functions to support these data types. We
 illustrate two such functions in the interpreter. 
 
-@Array Max & Min@ is a function which takes an array and produces four output
-values: the maximum value of the array and its index, the minimum value of the
-array and its index. The design of this node reflects one concern which
-appears often in the LabVIEW documentation and among their users: avoiding
-excessive array copying. While languages providing similar functionality
-typically provide separate functions for @min@ and @max@, here the language
-provides all four values at once, to dissuade the user from processing the
-array multiple times in case more than one value is needed. LabVIEW also
-provides a structure called @In Place Element Structure@, not implemented
-in this interpreter, where an array and one or more indices are entered as
-inputs, producing input and output tunnels for each index, so that values
-can be replaced in an aggregate data structure without producing copies.
-More recent versions of LabVIEW avoid array copying through optimization,
-reducing the usefulness of this structure.
+@Array Max & Min@ is a function that takes an array and produces four output
+values: the maximum value of the array, the index of this maximum value, the
+minimum value of the array, and the index of this minimum value. The design of
+this node reflects one concern which appears often in the LabVIEW
+documentation and among their users: avoiding excessive array copying. While
+languages providing similar functionality typically provide separate functions
+for @min@ and @max@, here the language provides all four values at once, to
+dissuade the user from processing the array multiple times in case more than
+one value is needed. LabVIEW also provides a control structure called @In
+Place Element Structure@, not implemented in this interpreter, where an array
+and one or more indices are entered as inputs, producing input and output
+tunnels for each index, so that values can be replaced in an aggregate data
+structure without producing copies. More recent versions of LabVIEW avoid
+array copying through optimization, reducing the usefulness of this control
+structure.
 
 \begin{code}
 arrayMaxMin a =
@@ -1217,7 +1230,8 @@ function node is LabVIEW's @Insert Into Array@ operation. To insert into an
 array |x| a value |y|, this nodes features as input ports the target array
 (|x|), the data to be inserted (|y|, which may also be an array) and one
 indexing input port for each dimension of |x|. However, only one indexing port
-may be connected.
+can be connected; the other ones must remain disconnected, and this indicates
+on which dimension the insertion should take place.
 
 The behavior of the function changes depending on which of the inputs are
 connected and what are the number of dimensions of array |x| and data |y|.
@@ -1291,12 +1305,12 @@ insertIntoArray vx vy idxs =
 
 @Random Number@ is an example of an impure function which produces a
 side-effect beyond the value sent through its output port. In our definition
-of the ``outside world'' which is part of the ongoing state computed in
+of the ``outside world'', which is part of the ongoing state computed in
 our model, we have the state of the pseudo-random number generator, which
 needs to be updated each time this node produces a value.
 
 In this interpreter, we implement the PRNG using the 32-bit variant of the
-Xorshift algorithm \cite{xorshift}.
+Xorshift algorithm~\cite{xorshift}.
 
 \begin{code}
 
@@ -1326,7 +1340,7 @@ instrument data acquisition which LabVIEW specializes on.
 
 When the function is applied, it immediately returns a continuation,
 containing the function |waitUntil| and the target timestamp |nextMs| as its
-argument. As we saw in Section \ref{functionnodes}, this will cause the
+argument. As we saw in Section~\ref{functionnodes}, this will cause the
 function to be rescheduled. The implementation of |waitUntil| checks
 the current time received in the |LvWorld| argument: if it has
 not reached the target time, the function returns another continuation
