@@ -1187,7 +1187,7 @@ binOp _ _ _   _     _                                  = undefined
 
 \end{code}
 
-\subsection{Array functions: @Array Max & Min@ and @Insert Into Array@}
+\subsection{Array functions}
 \label{arrayfns}
 
 Representing aggregate data structures and processing them efficiently is a recognized
@@ -1300,7 +1300,7 @@ insertIntoArray vx vy idxs =
 
 \end{code}
 
-\subsection{Random Number}
+\subsection{@Random Number@}
 \label{randomnumber}
 
 @Random Number@ is an example of an impure function which produces a
@@ -1326,7 +1326,7 @@ applyFunction "RandomNumber" w [] =
 
 \end{code}
 
-\subsection{Wait Until Next Ms}
+\subsection{@Wait Until Next Ms@}
 \label{waituntilnextms}
 
 Node @Wait Until Next Ms@ demonstrates both the use a value coming
