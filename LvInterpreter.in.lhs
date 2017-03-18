@@ -795,8 +795,8 @@ runNode (LvFunction name) s1 inputs idx =
          Just k   -> kFn k              (world s1) (catMaybes inputs)
       (w, mk, q, pvs) =
          case ret of
-         (w, LvReturn outVals)  -> ( w, Nothing,  [],                    zip (indices outVals) outVals )
-         (w, LvContinue k')     -> ( w, Just k',  [LvElemAddr LvN idx],  [] )
+         (w, LvReturn outVals)  -> ( w, Nothing,  [], zip (indices outVals) outVals )
+         (w, LvContinue k')     -> ( w, Just k',  [LvElemAddr LvN idx], [] )
       updateWorld w s = s { sPrng = wPrng w }
    in
       (updateWorld w $ updateNode idx s1 ns { nsCont = mk } q, pvs)
@@ -932,7 +932,8 @@ runNode (LvCase subvis) s1 inputs idx =
          case nsCont ns1 of
             Nothing ->  let
                            ns2 = index (sNStates s2) idx
-                           ns3 = ns2 { nsInputs = update 0 (Just (LvI32 n)) (nsInputs ns2) }
+                           inputs = update 0 (Just (LvI32 n)) (nsInputs ns2)
+                           ns3 = ns2 { nsInputs = inputs }
                         in
                            updateNode idx s2 ns3 []
             Just _ ->   s2
@@ -1061,11 +1062,9 @@ nextStep vi s i' =
    }
    where
       cvs'   = update 0 (LvI32 i') (sCtrlVals s)
-      cvs''  =  foldl' shiftRegister cvs'
-                $ zip (vIndics vi) (toList (sIndicVals s))
+      cvs''  =  foldl' shiftRegister cvs' $ zip (vIndics vi) (toList (sIndicVals s))
 
-      shiftRegister ::  Seq LvValue -> ((String, LvIndicator), LvValue)
-                        -> Seq LvValue
+      shiftRegister ::  Seq LvValue -> ((String, LvIndicator), LvValue) -> Seq LvValue
       shiftRegister cvs ((_, LvSRIndicator cidx), ival) = 
          update cidx ival cvs
       shiftRegister cvs _ = cvs
@@ -1170,19 +1169,19 @@ interpreter more alike to that of actual LabVIEW programs.
 
 numOp :: (Double -> Double -> Double)
          -> (Int -> Int -> Int) -> [Maybe LvValue] -> LvReturn
-numOp opD opI = binOp opD LvDBL opI LvI32
+numOp opD opI = LvReturn . return . binOp opD LvDBL opI LvI32
 
 boolOp :: (Double -> Double -> Bool)
           -> (Int -> Int -> Bool) -> [Maybe LvValue] -> LvReturn
-boolOp opD opI = binOp opD LvBool opI LvBool
+boolOp opD opI = LvReturn . return . binOp opD LvBool opI LvBool
 
 binOp :: (Double -> Double -> t) -> (t -> LvValue)
          -> (Int -> Int -> t1) -> (t1 -> LvValue)
-         -> [Maybe LvValue] -> LvReturn
-binOp opD tD _ _  [Just (LvDBL a),  Just (LvDBL b)]  = LvReturn [tD (opD a b)]
-binOp opD tD _ _  [Just (LvI32 a),  Just (LvDBL b)]  = LvReturn [tD (opD (fromIntegral a) b)]
-binOp opD tD _ _  [Just (LvDBL a),  Just (LvI32 b)]  = LvReturn [tD (opD a (fromIntegral b))]
-binOp _ _ opI tI  [Just (LvI32 a),  Just (LvI32 b)]  = LvReturn [tI (opI a b)]
+         -> [Maybe LvValue] -> LvValue
+binOp opD tD _ _  [Just (LvDBL a),  Just (LvDBL b)]  = tD (opD a b)
+binOp opD tD _ _  [Just (LvI32 a),  Just (LvDBL b)]  = tD (opD (fromIntegral a) b)
+binOp opD tD _ _  [Just (LvDBL a),  Just (LvI32 b)]  = tD (opD a (fromIntegral b))
+binOp _ _ opI tI  [Just (LvI32 a),  Just (LvI32 b)]  = tI (opI a b)
 binOp _ _ _   _     _                                  = undefined
 
 \end{code}
@@ -1190,10 +1189,11 @@ binOp _ _ _   _     _                                  = undefined
 \subsection{Array functions}
 \label{arrayfns}
 
-Representing aggregate data structures and processing them efficiently is a recognized
-issue in dataflow languages~\cite{advances}. LabVIEW includes support for arrays and
-clusters, and provides a large library of functions to support these data types. We
-illustrate two such functions in the interpreter. 
+Representing aggregate data structures and processing them efficiently is a
+recognized issue in dataflow
+languages~\cite{Johnston:2004:ADP:1013208.1013209}. LabVIEW includes support
+for arrays and clusters, and provides a large library of functions to support
+these data types. We illustrate two such functions in the interpreter. 
 
 @Array Max & Min@ is a function that takes an array and produces four output
 values: the maximum value of the array, the index of this maximum value, the

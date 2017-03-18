@@ -20,6 +20,7 @@
 %format s3 = "s_{3}"
 %format sk = "sk_{1}"
 %format sk' = "sk_{2} "
+%format ns1 = "ns_{1}"
 %format ns2 = "ns_{2}"
 %format ns3 = "ns_{3}"
 
