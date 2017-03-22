@@ -204,10 +204,18 @@ booleans; the \emph{clusters}, which are a heterogeneous tuple of values
 (working like a record or ``struct''); and homogeneous arrays.
 
 Unlike LabVIEW, our implementation allows arbitrarily recursive types (e.g. we
-support a cluster of arrays of arrays of clusters). Since we assume that input
-programs are properly type-checked, implementing the same restrictions that
-LabVIEW enforces to aggregate data types could be easily done in the
-type-checking step.
+support a cluster of arrays of arrays of clusters). 
+
+Though LabVIEW supports arrays of clusters, and clusters of arrays, it does
+not support arrays of arrays. The recommended alternative is to use an ``array
+of cluster of array'': an array where elements are single-element clusters
+containing an array. This limitation is an explicit design decision, harking
+back to the development of LabVIEW 2.0 in
+1988\footnote{\url{https://forums.ni.com/t5/LabVIEW-Idea-Exchange/Add-Support-for-Array-of-Array/idi-p/1875123}}.
+
+Since we assume that input programs are properly type-checked, implementing
+the same restrictions that LabVIEW enforces to aggregate data types could be
+easily done in the type-checking step.
 
 \begin{code}
 
@@ -1265,12 +1273,12 @@ insertIntoArray vx vy idxs =
    where
       (next, curr, base) =
          if ndims vx == ndims vy
-         then (  \_ lx ly     -> resizeCurr id lx ly,
-                 \_ lx ly     -> resizeLower lx ly,
+         then (  \ _ lx ly    -> resizeCurr id lx ly,
+                 \ _ lx ly    -> resizeLower lx ly,
                  \(LvArr ly)  -> ly)
          else (  \x _  ly     -> resizeCurr id x ly,
                  \x _  ly     -> [LvArr (resizeAll x ly)],
-                 \_           -> [vy])
+                 \ _          -> [vy])
    
       insertAt i lx ly = LvArr $ take i lx ++ ly ++ drop i lx
       

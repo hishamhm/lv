@@ -2,6 +2,8 @@
 local re = require("relabel")
 local inspect = require("inspect")
 
+local FILL_COLOR = "white"
+
 local types = [[
 
    LvElemType <- 'LvN' / 'LvC' / 'LvI'
@@ -382,7 +384,7 @@ local function update_probe(graph, probe, val)
       val = ""
    end
    if val ~= "" then
-      tbl.fillcolor = "yellow"
+      tbl.fillcolor = FILL_COLOR
       tbl.label = show(val)
       tbl.fixedsize = #tbl.label < 10 and "true" or "false"
       tbl.value = val
@@ -412,7 +414,7 @@ local function adjust_probes(graph, state, cases)
       node.attributes.label = label_for_edge(node.display, "Control", control_value)
       node.attributes.fillcolor = "white"
       if node.value ~= control_value then
-         node.attributes.fillcolor = "yellow"
+         node.attributes.fillcolor = FILL_COLOR
       end
       node.value = control_value
    end
@@ -423,7 +425,7 @@ local function adjust_probes(graph, state, cases)
       node.attributes.fillcolor = "white"
       if graph.nodes[probe] then
          if show(graph.nodes[probe].attributes.value) ~= show(indicator_value) then
-            node.attributes.fillcolor = "yellow"
+            node.attributes.fillcolor = FILL_COLOR
             update_probe(graph, probe, indicator_value)
          else
             update_probe(graph, probe, "Nothing")
