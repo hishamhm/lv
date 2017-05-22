@@ -31,7 +31,7 @@ main =
    do
       print vi
       runVI vi
-         where vi = randomXY
+         where vi = testingCase
 
 \end{code}
 
@@ -194,45 +194,5 @@ testingCase =
 \end{code}
 
 %END LYX DEMO
-
-\section{Concurrent for-loops}
-
-This example demonstrates two structures running concurrently. Two identical
-for-loops run with different inputs.
-
-\begin{code}
-
-#include "demo/testingFor.hs"
-
-\end{code}
-
-\section{A while-loop}
-
-Numeric2 only sets after the for-loop is done, this means the while-loop only
-starts after its input tunnels have data.
-
-\begin{code}
-
-#include "demo/testingWhile.hs"
-
-#include "testutil/sumTimers.hs"
-
-\end{code}
-
-\section{An example with a sequence}
-
-\begin{code}
-
-#include "demo/testingSeq.hs"
-
-\end{code}
-
-\section{An example with cases}
-
-\begin{code}
-
-#include "demo/testingCase.hs"
-
-\end{code}
 
 \end{document}
