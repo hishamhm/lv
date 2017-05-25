@@ -2,7 +2,7 @@
 testingWhile =
    makeVI
          [ -- controls
-            ("input", LvControl (LvDBL 10.0))
+            ("input", LvControl (LvDBL 5.0))
          ]
          [ -- indicators
             ("indicator", LvIndicator (LvDBL (-999.0)))

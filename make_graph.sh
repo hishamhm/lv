@@ -1,6 +1,6 @@
 #!/bin/sh
 
-FRAMERATE=2
+FRAMERATE=20
 FORMAT=png
 FORK=6
 

@@ -12,14 +12,14 @@ forSumTimer =
          [ -- nodes
             ("+", LvFunction "+"),
             ("WaitUntilNextMs", LvFunction "WaitUntilNextMs"),
-            ("20", LvConstant (LvI32 20))
+            ("200", LvConstant (LvI32 200))
          ]
          [ -- wires
             wire "shift reg out"  "+:0",
             wire "i"              "+:1",
             wire "+"              "shift reg in",
             wire "+"              "out",
-            wire "20"             "WaitUntilNextMs"
+            wire "200"             "WaitUntilNextMs"
          ]
 
 whileSumTimer =
@@ -37,17 +37,17 @@ whileSumTimer =
          ("+", LvFunction "+"),
          ("<", LvFunction "<"),
          ("WaitUntilNextMs", LvFunction "WaitUntilNextMs"),
-         ("10", LvConstant (LvI32 10)),
-         ("50", LvConstant (LvI32 50)),
+         ("100", LvConstant (LvI32 100)),
+         ("20", LvConstant (LvI32 20)),
          ("12345", LvConstant (LvI32 12345))
       ]
       [ -- wires
          wire "i"             "<:0",
-         wire "50"            "<:1",
+         wire "20"            "<:1",
          wire "i"             "+:0",
          wire "while tunnel"  "+:1",
          wire "+"             "Numeric",
          wire "12345"         "Numeric 2",
-         wire "10"            "WaitUntilNextMs",
+         wire "100"           "WaitUntilNextMs",
          wire "<"             "Test"
       ]

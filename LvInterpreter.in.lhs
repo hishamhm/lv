@@ -174,7 +174,7 @@ immediately fires its value.
 
 A feedback node holds the value it receives through its input port and fires
 it the next time the program is executed, when running in continuous mode
-as explained in Section~\ref{sub:LabVIEW-execution-modes}.
+as explained in Section~\ref{subsec:LabVIEW-execution-modes}.
 
 \begin{code}
 
@@ -376,7 +376,7 @@ reaching indicators, which provide feedback to the user via their
 representations in the front panel.
 
 This interpreter models a single-shot execution (as discussed in
-Section~\ref{sub:LabVIEW-execution-modes}). Continuous execution is
+Section~\ref{subsec:LabVIEW-execution-modes}). Continuous execution is
 semantically equivalent as enclosing the entire VI in a while-loop.
 
 \subsection{Main loop}
@@ -422,12 +422,13 @@ initialState ts prng vi =
    }
    where
       makeNState :: (Int, (String, LvNode)) -> LvNodeState
-      makeNState (i, (name, node)) =  LvNodeState {
-                                         nsInputs  = emptyInputs $ nrInputs i node,
-                                         nsCont    = Nothing 
-                                      }
+      makeNState (i, (name, node)) = 
+         LvNodeState {
+            nsInputs  = emptyInputs $ nrInputs i node,
+            nsCont    = Nothing 
+         }
       nrInputs :: Int -> LvNode -> Int
-      nrInputs i (LvFunction _)         = nrConnectedInputs i vi
+      nrInputs i (LvFunction _)         = nrWiredInputs i vi
       nrInputs _ (LvConstant _)         = 0
       nrInputs _ (LvStructure _ subvi)  = length $ vCtrls subvi
       nrInputs _ (LvCase subvis)        = length $ vCtrls (head subvis)
@@ -471,10 +472,10 @@ initialSchedule vi =
    where
       isBootNode _ (_, LvConstant _) = True
       isBootNode _ (_, LvFeedbackNode _) = True
-      isBootNode i (_, LvFunction _)              | nrConnectedInputs i vi == 0 = True
-      isBootNode i (_, LvStructure LvWhile _)     | nrConnectedInputs i vi == 0 = True
-      isBootNode i (_, LvStructure LvSubVI _)     | nrConnectedInputs i vi == 0 = True
-      isBootNode i (_, LvStructure LvSequence _)  | nrConnectedInputs i vi == 0 = True
+      isBootNode i (_, LvFunction _)              | nrWiredInputs i vi == 0 = True
+      isBootNode i (_, LvStructure LvWhile _)     | nrWiredInputs i vi == 0 = True
+      isBootNode i (_, LvStructure LvSubVI _)     | nrWiredInputs i vi == 0 = True
+      isBootNode i (_, LvStructure LvSequence _)  | nrWiredInputs i vi == 0 = True
       isBootNode _ _ = False
 
 \end{code}
@@ -488,8 +489,8 @@ of wires.
 
 \begin{code}
 
-nrConnectedInputs :: Int -> LvVI -> Int
-nrConnectedInputs idx vi =
+nrWiredInputs :: Int -> LvVI -> Int
+nrWiredInputs idx vi =
    1 + foldl' maxInput (-1) (vWires vi)
    where
       maxInput :: Int -> LvWire -> Int

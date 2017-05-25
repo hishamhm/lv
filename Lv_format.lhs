@@ -23,5 +23,3 @@
 %format ns1 = "ns_{1}"
 %format ns2 = "ns_{2}"
 %format ns3 = "ns_{3}"
-
-%format LvState = "\hyperlink{LvState}{LvState}"
