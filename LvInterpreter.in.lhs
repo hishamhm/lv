@@ -260,6 +260,8 @@ data LvElemType  =  LvC
 
 \section{Representation of state}
 
+Now that the static representation of program code is defined, we move on
+to defining the dynamic representation of program state during execution.
 The representation of a state in our interpreter is a record containing the
 following values: the timestamp, a scheduler queue listing the next elements
 that need to be processed, and three sequences that store the internal states
@@ -1083,7 +1085,8 @@ nextStep vi s i' =
 \section{Operations}
 
 The final section of the interpreter is the implementation of the various
-operations available in the language as function nodes. These operations
+operations available in the language as function nodes, forming its
+``standard library''. These operations
 are implemented as cases for function |applyFunction|, which takes a
 string with the name of the function, an instance of the outside world,
 the list of input values, and produces a return, which may be a list of
