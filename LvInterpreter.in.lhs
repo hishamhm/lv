@@ -71,8 +71,8 @@ shw x = (chr 27 : "[1;33m") ++ show x ++ (chr 27 : "[0m")
 
 \section{Representation of programs}
 
-A program in LabVIEW (called a VI, or Virtual Instrument) is a graph
-connecting different kinds of objects. In LabVIEW terminology, these objects
+As mentioned in Section~\ref{labview-overview}, a program in LabVIEW is called a VI.
+It is a graph connecting different kinds of objects. In LabVIEW terminology, these objects
 are called \emph{controls}, which are input-only, \emph{indicators}, which are
 output-only, and \emph{nodes}, which are all other operations. Throughout the
 implementation, we will use this nomenclature; in particular the name ``node''
@@ -1089,7 +1089,7 @@ operations available in the language as function nodes, forming its
 ``standard library''. These operations
 are implemented as cases for function |applyFunction|, which takes a
 string with the name of the function, an instance of the outside world,
-the list of input values, and produces a return, which may be a list of
+the list of input values, and produces a return value, which may be a list of
 results or a continuation, along with the updated state of the world.
 
 \begin{code}
